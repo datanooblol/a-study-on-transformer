@@ -59,3 +59,17 @@ with torch.no_grad():
     embeddings = model.encode(padded, mask)
 
 print(f"Embeddings shape: {embeddings.shape}")  # (100, 64)
+
+# --- UMAP + Plotly 3D ---
+import umap
+import plotly.express as px
+import pandas as pd
+
+reducer = umap.UMAP(n_components=3, random_state=42)
+coords = reducer.fit_transform(embeddings.cpu().numpy())
+
+df = pd.DataFrame(coords, columns=["x", "y", "z"])
+df["sample"] = [f"seq_{i}" for i in range(len(sequences))]
+
+fig = px.scatter_3d(df, x="x", y="y", z="z", hover_name="sample", title="Embeddings (UMAP 3D)")
+fig.show()

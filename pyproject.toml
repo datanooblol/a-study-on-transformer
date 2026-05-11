@@ -6,8 +6,11 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "numpy>=2.4.4",
+  "pandas>=3.0.2",
+  "plotly>=6.7.0",
   "scikit-learn>=1.8.0",
   "torch>=2.11.0",
+  "umap-learn>=0.5.12",
 ]
 
 [tool.uv.sources]
@@ -23,4 +26,5 @@ explicit = true
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",
+    "nbformat>=5.10.4",
 ]

@@ -157,3 +157,119 @@ predict(model,
 3. **Padding & Masking** (`package/pad_and_mask.py`) — pad variable-length sequences and produce attention masks
 4. **Transformer Encoder** (`package/encoder_block.py`) — encode padded sequences into fixed-size embeddings
 5. **Clustering** — (TBD) cluster the learned embeddings
+
+---
+
+## Appendix: Bringing Your Own Data
+
+If you have real customer data instead of the mock dataset, `InsuranceDataset` takes your sequences directly:
+
+```python
+purchase_sequences = [["A", "C", "A"], ["B", "D", "B"], ["A", "C", "A", "C"]]
+age_sequences      = [[25.0, 28.0, 31.0], [40.0, 43.0, 46.0], [30.0, 33.0, 36.0, 39.0]]
+price_sequences    = [[105.0, 95.0, 110.0], [410.0, 390.0, 420.0], [100.0, 120.0, 95.0, 110.0]]
+```
+
+The sequences above have different lengths (3, 3, 4). `DataLoader` requires all samples in a batch to be the same shape, so you need a padding strategy. Two options:
+
+---
+
+### Option 1 — Pre-pad in `__init__`
+
+Pad all sequences to the global max length once when the dataset is created.
+
+```python
+def pad_sequence(seq, max_len, pad_value):
+    return seq + [pad_value] * (max_len - len(seq))
+
+class InsuranceDataset(Dataset):
+    def __init__(self, purchases, ages, prices):
+        max_len = max(len(s) for s in purchases)
+
+        self.purchases = []
+        self.ages      = []
+        self.prices    = []
+        self.masks     = []  # True = padding, False = real data
+
+        for p, a, pr in zip(purchases, ages, prices):
+            pad_len = max_len - len(p)
+            self.purchases.append(pad_sequence([policy_to_id[x] for x in p], max_len, 0))
+            self.ages.append(pad_sequence(a,   max_len, 0.0))
+            self.prices.append(pad_sequence(pr, max_len, 0.0))
+            self.masks.append([False] * len(p) + [True] * pad_len)
+
+    def __len__(self):
+        return len(self.purchases)
+
+    def __getitem__(self, idx):
+        return (
+            torch.tensor(self.purchases[idx], dtype=torch.long),
+            torch.tensor(self.ages[idx],      dtype=torch.float).unsqueeze(-1),
+            torch.tensor(self.prices[idx],    dtype=torch.float).unsqueeze(-1),
+            torch.tensor(self.masks[idx],     dtype=torch.bool),
+        )
+
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+```
+
+**Pros:**
+- Simple — no extra code at the `DataLoader` level
+- Padding is done once, not repeated every epoch
+
+**Cons:**
+- If one sequence is much longer than the rest, every sample gets padded to that length — wastes memory and compute
+- Global max length is fixed at dataset creation time — can't add longer sequences later without rebuilding
+
+---
+
+### Option 2 — `collate_fn` in `DataLoader`
+
+Keep `__getitem__` simple, pad per batch to the longest sequence in that batch.
+
+```python
+class InsuranceDataset(Dataset):
+    def __init__(self, purchases, ages, prices):
+        self.purchases = [[policy_to_id[p] for p in seq] for seq in purchases]
+        self.ages      = ages
+        self.prices    = prices
+
+    def __len__(self):
+        return len(self.purchases)
+
+    def __getitem__(self, idx):
+        return (
+            torch.tensor(self.purchases[idx], dtype=torch.long),
+            torch.tensor(self.ages[idx],      dtype=torch.float).unsqueeze(-1),
+            torch.tensor(self.prices[idx],    dtype=torch.float).unsqueeze(-1),
+        )
+
+def collate_fn(batch):
+    policies, ages, prices = zip(*batch)
+
+    policies_padded = torch.nn.utils.rnn.pad_sequence(policies, batch_first=True, padding_value=0)
+    ages_padded     = torch.nn.utils.rnn.pad_sequence(ages,     batch_first=True, padding_value=0.0)
+    prices_padded   = torch.nn.utils.rnn.pad_sequence(prices,   batch_first=True, padding_value=0.0)
+
+    # pad mask: True where position is beyond the real sequence length
+    lengths  = torch.tensor([len(p) for p in policies])
+    max_len  = policies_padded.shape[1]
+    pad_mask = torch.arange(max_len).unsqueeze(0) >= lengths.unsqueeze(1)  # (batch, max_len)
+
+    return policies_padded, ages_padded, prices_padded, pad_mask
+
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True, collate_fn=collate_fn)
+```
+
+**Pros:**
+- Each batch only pads to its own longest sequence — less wasted compute when sequence lengths vary a lot
+- `__getitem__` stays clean and simple
+- Works naturally with streaming or dynamically growing datasets
+
+**Cons:**
+- Slightly more code to write and maintain
+- Batch shape varies between batches — minor overhead but rarely an issue in practice
+
+---
+
+**Which to use for the insurance case:**
+Option 1 is fine — customer purchase histories are short and similar in length. Option 2 becomes worth it when sequences vary widely, e.g. one customer has 3 purchases and another has 50.

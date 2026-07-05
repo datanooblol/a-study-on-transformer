@@ -23,6 +23,13 @@
   --code-dim: #8b95a7;
   --shadow: 0 1px 2px rgba(20, 24, 38, 0.04), 0 8px 24px rgba(20, 24, 38, 0.05);
   --radius: 12px;
+
+  /* architecture-type color coding, used by nav dots + in-page badges */
+  --enc-color: #2563eb;    --enc-bg: #eff6ff;
+  --dec-color: #c2410c;    --dec-bg: #fff7ed;
+  --encdec-color: #7c3aed; --encdec-bg: #f5f3ff;
+  --core-color: #047857;   --core-bg: #ecfdf5;
+  --multi-color: #db2777;  --multi-bg: #fdf2f8;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -48,6 +55,12 @@
     --code-text: #dbe2ee;
     --code-dim: #7b8496;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35);
+
+    --enc-color: #93c5fd;    --enc-bg: #132036;
+    --dec-color: #fdba74;    --dec-bg: #2a1c10;
+    --encdec-color: #c4b5fd; --encdec-bg: #241b3a;
+    --core-color: #6ee7b7;   --core-bg: #0e2a20;
+    --multi-color: #f9a8d4;  --multi-bg: #34162a;
   }
 }
 
@@ -116,6 +129,69 @@ a:hover { text-decoration: underline; }
   color: white;
   font-weight: 600;
 }
+
+/* small colored dot in the nav pill, showing which architecture type each lesson covers */
+.nav-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+}
+.pill.current .nav-dot { box-shadow: 0 0 0 2px rgba(255,255,255,0.55); }
+.dot-core  { background: var(--core-color); }
+.dot-enc   { background: var(--enc-color); }
+.dot-dec   { background: var(--dec-color); }
+.dot-encdec{ background: var(--encdec-color); }
+.dot-multi { background: var(--multi-color); }
+
+/* legend + in-page architecture badges */
+.arch-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin: 4px 0 20px;
+}
+.arch-legend .item { display: flex; align-items: center; gap: 6px; }
+
+.arch-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 26px;
+}
+.arch-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1.5px solid;
+  white-space: nowrap;
+}
+.arch-badge .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+.arch-badge.enc    { color: var(--enc-color);    border-color: var(--enc-color);    background: var(--enc-bg); }
+.arch-badge.enc .dot    { background: var(--enc-color); }
+.arch-badge.dec    { color: var(--dec-color);    border-color: var(--dec-color);    background: var(--dec-bg); }
+.arch-badge.dec .dot    { background: var(--dec-color); }
+.arch-badge.encdec { color: var(--encdec-color); border-color: var(--encdec-color); background: var(--encdec-bg); }
+.arch-badge.encdec .dot { background: var(--encdec-color); }
+.arch-badge.core   { color: var(--core-color);   border-color: var(--core-color);   background: var(--core-bg); }
+.arch-badge.core .dot   { background: var(--core-color); }
+.arch-badge.multi  { color: var(--multi-color);  border-color: var(--multi-color);  background: var(--multi-bg); }
+.arch-badge.multi .dot  { background: var(--multi-color); }
+
+/* smaller inline variant used next to a mid-page h2/h3 in lesson 9's per-section breakdown */
+.arch-badge.inline { font-size: 0.66rem; padding: 3px 9px; margin-left: 8px; vertical-align: middle; }
 
 /* ---------- page layout ---------- */
 

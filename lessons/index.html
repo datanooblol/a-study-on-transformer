@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A Study on Transformer — Lessons</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill current" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html">1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html">2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html">3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html">4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html">5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html">6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html">7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html">8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html">9 · Beyond NLP</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Study Curriculum</p>
+  <h1>A Study on Transformer</h1>
+  <p class="subtitle">Understanding transformer architecture inside out — not as a language model, but as a general
+  sequence-processing pattern applied to insurance customer data. Nine lessons, each grounded in the actual code
+  in this repo, ending in two examples of the pattern applied outside insurance/NLP entirely.</p>
+
+  <h2>How to use this</h2>
+  <p>Read the lessons in order the first time — each one builds on the last. After that, use the pill nav above
+  to jump straight to whatever you're rusty on. Every lesson has a <strong>Files to open</strong> box pointing at
+  the real source in this repo — the code shown is copied verbatim, so you can read the lesson side-by-side with
+  the file in your editor.</p>
+  <p>Callouts you'll see throughout:</p>
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip</div>
+    <p>A detail worth remembering — not a mistake, just something easy to miss.</p>
+  </div>
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice</div>
+    <p>Somewhere the actual code in this repo is inconsistent, incomplete, or diverges from what you'd do in
+    production. These are called out on purpose instead of smoothed over — they're some of the best learning
+    material here.</p>
+  </div>
+  <div class="callout good">
+    <div class="callout-title">✓ Pattern worth reusing</div>
+    <p>A design choice in this repo that generalizes well and is worth carrying into other projects.</p>
+  </div>
+
+  <h2>The big picture</h2>
+  <div class="diagram">
+    <div class="stack">
+      <div class="stack-box accent">Lesson 1 — Attention &amp; RoPE<span class="sub">Q/K/V, scaled dot-product, multi-head, rotary position encoding</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">Lesson 2 — Three Architectures<span class="sub">same attention block, three masking/wiring choices</span></div>
+      <div class="stack-arrow">↓</div>
+    </div>
+    <div class="flow" style="margin: 10px 0 18px;">
+      <div class="flow-box"><span class="t">Encoder-only</span><span class="s">bidirectional</span></div>
+      <div class="flow-box"><span class="t">Encoder+Decoder</span><span class="s">translate/summarize</span></div>
+      <div class="flow-box"><span class="t">Decoder-only (GPT)</span><span class="s">causal, autoregressive</span></div>
+    </div>
+    <div class="stack">
+      <div class="stack-arrow">↓ (encoder path)</div>
+      <div class="stack-box">Lesson 3 — CLS &amp; Padding<span class="sub">collapse a variable-length sequence into one vector</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 4 — Datasets &amp; Pipelines<span class="sub">Dataset → collate_fn/pre-pad → padded batch + mask</span></div>
+      <div class="stack-arrow">↓</div>
+    </div>
+    <div class="flow" style="margin: 10px 0 4px;">
+      <div class="flow-box accent"><span class="t">Lesson 5</span><span class="s">contrastive pretraining (encoder)</span></div>
+      <div class="flow-box accent"><span class="t">Lesson 6</span><span class="s">next-purchase forecast (decoder)</span></div>
+      <div class="flow-box accent"><span class="t">Lesson 7</span><span class="s">claim regression (encoder + CLS)</span></div>
+    </div>
+    <div class="stack" style="margin-top: 8px;">
+      <div class="stack-arrow">↓ all three feed into</div>
+      <div class="stack-box">Lesson 8 — Validate &amp; Deploy<span class="sub">what's missing today, and how to add it</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 9 — Beyond NLP<span class="sub">time-series, tabular fusion, vision — same blocks, new tokens</span></div>
+    </div>
+  </div>
+
+  <h2>Lessons</h2>
+  <table class="cmp">
+    <tr><th>#</th><th>Lesson</th><th>Core question it answers</th></tr>
+    <tr><td>1</td><td><a href="01-attention-and-rope.html">Attention &amp; RoPE</a></td><td>How does one token decide what to look at, and how does it know where it is in the sequence?</td></tr>
+    <tr><td>2</td><td><a href="02-three-architectures.html">Three Architectures</a></td><td>What's the actual structural difference between BERT, the original Transformer, and GPT?</td></tr>
+    <tr><td>3</td><td><a href="03-cls-and-padding.html">CLS &amp; Padding</a></td><td>How do you turn N token vectors and variable-length input into one fixed-size, correct vector?</td></tr>
+    <tr><td>4</td><td><a href="04-datasets-and-pipelines.html">Datasets &amp; Pipelines</a></td><td>How do you get real variable-length data into a model-ready batch, correctly?</td></tr>
+    <tr><td>5</td><td><a href="05-self-supervised-contrastive.html">Contrastive Pretraining</a></td><td>How do you learn useful embeddings with no labels at all?</td></tr>
+    <tr><td>6</td><td><a href="06-applied-decoder-insurance.html">Decoder Project</a></td><td>How do you forecast the next event in a customer's history?</td></tr>
+    <tr><td>7</td><td><a href="07-applied-encoder-insurance.html">Encoder Project</a></td><td>How do you predict one number from an entire multi-sequence history?</td></tr>
+    <tr><td>8</td><td><a href="08-validation-and-deployment.html">Validate &amp; Deploy</a></td><td>How do you know the model actually works, and what does shipping it look like?</td></tr>
+    <tr><td>9</td><td><a href="09-beyond-nlp.html">Beyond NLP</a></td><td>What else is "just a sequence of tokens" — time-series, tabular rows, image patches?</td></tr>
+  </table>
+
+  <h2>Repo map</h2>
+  <div class="files-box">
+    <span class="label">Where each lesson's code actually lives</span>
+    <ul>
+      <li><code>package/encoder_block.py</code>, <code>decoder_block.py</code>, <code>gpt_decoder_block.py</code> — lessons 1, 2</li>
+      <li><code>package/insurance_decoder_block.py</code>, <code>train_insurance.py</code> — lesson 6</li>
+      <li><code>package/data_loader.py</code>, <code>collate.py</code>, <code>pad_and_mask.py</code> — lesson 4</li>
+      <li><code>package/contrastive_loss.py</code>, <code>transformer.py</code>, <code>main.py</code> — lesson 5</li>
+      <li><code>train_insurance_representation_for_claim.py</code>, <code>CLS_and_PAD.md</code> — lessons 3, 7</li>
+      <li><code>dev.ipynb</code>, <code>transformer_encode_block.ipynb</code> — scratch notebooks referenced in lessons 1, 5, 8</li>
+    </ul>
+  </div>
+
+  <div class="lesson-footer">
+    <span></span>
+    <a class="next" href="01-attention-and-rope.html"><span class="dir">Start with</span>Lesson 1 — Attention &amp; RoPE →</a>
+  </div>
+</main>
+</body>
+</html>

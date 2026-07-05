@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 3 — CLS &amp; Padding</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html">1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html">2 · Three Architectures</a>
+      <a class="pill current" href="03-cls-and-padding.html">3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html">4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html">5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html">6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html">7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html">8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html">9 · Beyond NLP</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 3 of 9</p>
+  <h1>CLS Token &amp; Padding Mask</h1>
+  <p class="subtitle">The encoder outputs one vector per input token. But a regression/classification head needs
+  exactly one vector per <em>sequence</em>. This lesson is about the trick that bridges that gap, and the mask
+  that makes it work correctly on variable-length input.</p>
+
+  <div class="files-box">
+    <span class="label">Files to open alongside this lesson</span>
+    <ul>
+      <li><code>CLS_and_PAD.md</code> — original deep-dive this lesson visualizes</li>
+      <li><code>train_insurance_representation_for_claim.py</code> — <code>SequenceEncoder</code> (the real implementation)</li>
+    </ul>
+  </div>
+
+  <h2>Two problems, one section each</h2>
+  <ol>
+    <li>How do you collapse a variable-length sequence into one fixed-size vector?</li>
+    <li>How do you stop the model from attending to PAD positions that carry no real information?</li>
+  </ol>
+  <p><strong>CLS token</strong> solves problem 1. <strong>Padding mask</strong> solves problem 2. They're used
+  together, but they're solving different things.</p>
+
+  <h2>Setup</h2>
+  <p>Two customers, <code>MAX_PURCHASES = 5</code>. <code>0</code> is reserved for PAD in every vocabulary in
+  this repo — real ids start at 1.</p>
+  <div class="diagram">
+    <div class="grid-label">Customer 1 — purchases: Health, Health, OPD (2 PAD at the end)</div>
+    <div class="token-row">
+      <div class="tok real">1<br><span style="font-size:0.6rem">Health</span></div>
+      <div class="tok real">1<br><span style="font-size:0.6rem">Health</span></div>
+      <div class="tok real">3<br><span style="font-size:0.6rem">OPD</span></div>
+      <div class="tok pad">0<br><span style="font-size:0.6rem">PAD</span></div>
+      <div class="tok pad">0<br><span style="font-size:0.6rem">PAD</span></div>
+    </div>
+    <div class="grid-label" style="margin-top:14px;">Customer 2 — purchases: Life (4 PAD at the end)</div>
+    <div class="token-row">
+      <div class="tok real">2<br><span style="font-size:0.6rem">Life</span></div>
+      <div class="tok pad">0<br><span style="font-size:0.6rem">PAD</span></div>
+      <div class="tok pad">0<br><span style="font-size:0.6rem">PAD</span></div>
+      <div class="tok pad">0<br><span style="font-size:0.6rem">PAD</span></div>
+      <div class="tok pad">0<br><span style="font-size:0.6rem">PAD</span></div>
+    </div>
+  </div>
+
+  <h2>What gets built in <code>__init__</code></h2>
+  <div class="code-block">
+    <div class="file-tag">SequenceEncoder.__init__</div>
+    <pre><code># +1 for PAD token at index 0 — padding_idx=0 keeps its embedding at all zeros
+# and PyTorch never updates that row during training
+self.embed = nn.Embedding(vocab_size + 1, d_model, padding_idx=0)
+
+# one learnable CLS vector, shared across the whole batch — starts random,
+# gradually learns to be a good "collector" of sequence information
+self.cls = nn.Parameter(torch.randn(1, 1, d_model))
+
+# max_len + 1 because prepending CLS makes every sequence one token longer
+self.encoder = EncoderBlock(d_model, n_heads, max_len + 1)</code></pre>
+  </div>
+
+  <h2>Forward, step by step</h2>
+
+  <h3>1. Build the padding mask</h3>
+  <div class="code-block">
+    <div class="file-tag">SequenceEncoder.forward</div>
+    <pre><code>pad_mask = tokens == 0   # (batch, seq_len) — True = this position is padding</code></pre>
+  </div>
+
+  <h3>2. Prepend a False column for CLS</h3>
+  <div class="code-block">
+    <pre><code>cls_col  = torch.zeros(batch, 1, dtype=torch.bool, device=tokens.device)
+pad_mask = torch.cat([cls_col, pad_mask], dim=1)</code></pre>
+  </div>
+  <p>CLS is never padding, so its column is always <code>False</code> — we add it purely so the mask's shape
+  matches the sequence length after CLS is prepended in step 3.</p>
+
+  <h3>3. Embed tokens and prepend CLS</h3>
+  <div class="code-block">
+    <pre><code>x   = self.embed(tokens)              # (batch, seq_len, d_model)
+cls = self.cls.expand(batch, -1, -1)  # (1, 1, d_model) → (batch, 1, d_model), no copy
+x   = torch.cat([cls, x], dim=1)      # (batch, 1+seq_len, d_model)</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">Customer 1 after prepending CLS</div>
+    <div class="token-row">
+      <div class="tok cls">CLS</div>
+      <div class="tok real">H</div>
+      <div class="tok real">H</div>
+      <div class="tok real">OPD</div>
+      <div class="tok pad">PAD</div>
+      <div class="tok pad">PAD</div>
+    </div>
+  </div>
+
+  <h3>4. Run the encoder</h3>
+  <p>Every token attends to every other token (Lesson 1/2 — this is <code>EncoderBlock</code>, fully bidirectional),
+  but PAD positions are masked to <code>-inf</code> so softmax gives them ~0 weight everywhere. CLS attends to
+  every real token and pulls their information into its own output slot.</p>
+
+  <h3>5. Read only the CLS output</h3>
+  <div class="code-block">
+    <pre><code>out = self.encoder(x, pad_mask)   # (batch, 1+seq_len, d_model)
+return out[:, 0]                  # (batch, d_model) — CLS position only</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">what comes back out — only position 0 (CLS*) is used</div>
+    <div class="token-row">
+      <div class="tok cls">CLS*<br><span style="font-size:0.55rem">used</span></div>
+      <div class="tok masked">H*</div>
+      <div class="tok masked">H*</div>
+      <div class="tok masked">OPD*</div>
+      <div class="tok masked">PAD*</div>
+      <div class="tok masked">PAD*</div>
+    </div>
+    <p class="diagram-caption">All five non-CLS outputs are computed but simply discarded — CLS* is the one
+    fixed-size vector that summarizes this entire variable-length customer history.</p>
+  </div>
+
+  <h2>Why CLS instead of averaging?</h2>
+  <p>Averaging all real token vectors is a legitimate, simpler alternative:</p>
+  <div class="code-block"><pre><code>return out[:, 1:].mean(dim=1)   # average over real positions only</code></pre></div>
+  <p>CLS is generally preferred because averaging treats every token equally by construction, while CLS <em>learns</em>
+  what to weight — it can learn "the most recent purchase matters more" if that's what the loss rewards. It's
+  also the same trick BERT uses for sentence embeddings, so it's well-trodden ground.</p>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip</div>
+    <p><code>padding_idx=0</code> zeroing the PAD embedding is a nice-to-have, not the safety mechanism. The mask
+    is what actually prevents PAD from influencing the result — without it, PAD's (zero) vector would still
+    receive a nonzero softmax weight and get mixed into every other token's attention output.</p>
+  </div>
+
+  <h2>Decoder vs encoder — which position do you read?</h2>
+  <table class="cmp">
+    <tr><th></th><th><code>train_insurance.py</code> (decoder, Lesson 6)</th><th><code>train_insurance_representation_for_claim.py</code> (encoder, Lesson 7)</th></tr>
+    <tr><td>Goal</td><td>predict the <strong>next event</strong> in a sequence</td><td>predict a <strong>single value</strong> from the full history</td></tr>
+    <tr><td>Reads</td><td>past events only (causal mask)</td><td>all events freely (no causal mask)</td></tr>
+    <tr><td>Output used</td><td>last position <code>[:, -1]</code></td><td>CLS position <code>[:, 0]</code></td></tr>
+    <tr><td>Positional encoding</td><td>RoPE</td><td>RoPE</td></tr>
+  </table>
+
+  <div class="lesson-footer">
+    <a href="02-three-architectures.html"><span class="dir">Back</span>Lesson 2 — Three Architectures</a>
+    <a class="next" href="04-datasets-and-pipelines.html"><span class="dir">Next</span>Lesson 4 — Datasets &amp; Pipelines →</a>
+  </div>
+</main>
+</body>
+</html>

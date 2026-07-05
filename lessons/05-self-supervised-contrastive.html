@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 5 — Contrastive Pretraining</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html">1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html">2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html">3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html">4 · Datasets &amp; Pipelines</a>
+      <a class="pill current" href="05-self-supervised-contrastive.html">5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html">6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html">7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html">8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html">9 · Beyond NLP</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 5 of 9</p>
+  <h1>Self-Supervised Contrastive Pretraining</h1>
+  <p class="subtitle">No labels at all — just raw interaction sequences. This lesson learns useful embeddings by
+  teaching the model that two random crops of the <em>same</em> sequence should look similar, and every other
+  sequence in the batch should look different. This is SimCLR, applied to sequences instead of images.</p>
+
+  <div class="files-box">
+    <span class="label">Files to open alongside this lesson</span>
+    <ul>
+      <li><code>package/collate.py</code> — <code>crop_pair</code>, <code>contrastive_collate_fn</code></li>
+      <li><code>package/contrastive_loss.py</code> — <code>nt_xent_loss</code></li>
+      <li><code>package/transformer.py</code> — <code>ContrastiveTransformerEncoder</code></li>
+      <li><code>main.py</code> — full training + embedding + UMAP visualization loop</li>
+    </ul>
+  </div>
+
+  <h2>The pretext task</h2>
+  <p>Crop two random contiguous sub-sequences from the same source sequence — a <strong>positive pair</strong>.
+  Every other sample in the batch (and its crop) becomes a <strong>negative</strong>. The loss pulls positive
+  pairs' embeddings together and pushes negatives apart. No human-labeled target required.</p>
+
+  <div class="code-block">
+    <div class="file-tag">package/collate.py — crop_pair</div>
+    <pre><code>def crop_pair(sequence, min_len=3, max_len=None):
+    def _random_crop():
+        length = random.randint(min_len, max_len)
+        start  = random.randint(0, n - length)
+        return sequence[start : start + length]   # contiguous, order preserved
+
+    return _random_crop(), _random_crop()   # two independent crops of the same sequence</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">sequence = [1, 2, 3, 4, 5, 6, 7] — two independent crops</div>
+    <div class="token-row">
+      <div class="tok" style="opacity:.35">1</div>
+      <div class="tok real">2</div><div class="tok real">3</div><div class="tok real">4</div><div class="tok real">5</div>
+      <div class="tok" style="opacity:.35">6</div><div class="tok" style="opacity:.35">7</div>
+    </div>
+    <div class="grid-label">crop 1 = [2,3,4,5]</div>
+    <div class="token-row" style="margin-top:12px;">
+      <div class="tok" style="opacity:.35">1</div><div class="tok" style="opacity:.35">2</div><div class="tok" style="opacity:.35">3</div>
+      <div class="tok cls">4</div><div class="tok cls">5</div><div class="tok cls">6</div>
+      <div class="tok" style="opacity:.35">7</div>
+    </div>
+    <div class="grid-label">crop 2 = [4,5,6] — same source, different window</div>
+  </div>
+
+  <div class="code-block">
+    <div class="file-tag">package/collate.py — contrastive_collate_fn</div>
+    <pre><code>for seq in batch:
+    c1, c2 = crop_pair(seq, min_len=min_len, max_len=max_len)
+    crops_1.append(c1)
+    crops_2.append(c2)
+
+x1_padded, x1_mask = pad_and_mask(crops_1, pad_value=pad_value)
+x2_padded, x2_mask = pad_and_mask(crops_2, pad_value=pad_value)
+return x1_padded, x1_mask, x2_padded, x2_mask</code></pre>
+  </div>
+  <p>Note this reuses <code>pad_and_mask</code> from Lesson 4 — each crop group is padded to its own group's max
+  length, independently.</p>
+
+  <h2>NT-Xent — turning "closer/farther" into a loss</h2>
+  <p>SimCLR's loss (Normalized Temperature-scaled Cross-Entropy). With batch size N, you get 2N embeddings total
+  (N from crop 1, N from crop 2). Stack them, compute all pairwise cosine similarities (a 2N×2N matrix), mask out
+  the diagonal (a sample is never compared to itself), and treat each row as a classification problem: "which of
+  the other 2N−1 vectors is my actual positive pair?"</p>
+
+  <div class="code-block">
+    <div class="file-tag">package/contrastive_loss.py — nt_xent_loss</div>
+    <pre><code>z = torch.cat([z1, z2], dim=0)              # (2N, proj_dim) — z1 at 0..N-1, z2 at N..2N-1
+sim = (z @ z.T) / temperature                # (2N, 2N) cosine similarity (z is L2-normalized)
+
+mask = ~torch.eye(2 * N, dtype=torch.bool, device=z.device)
+sim = sim.masked_fill(~mask, float("-inf"))  # exclude self-similarity
+
+labels = torch.cat([torch.arange(N, 2 * N), torch.arange(N)], dim=0)
+return F.cross_entropy(sim, labels)</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">2N×2N similarity matrix, N=3 — diagonal excluded, ✓ marks each row's true positive</div>
+    <div class="matrix-wrap">
+      <div class="matrix" style="grid-template-columns: 46px repeat(6, 40px);">
+        <div class="mcell h0"></div>
+        <div class="mcell h0">z1₀</div><div class="mcell h0">z1₁</div><div class="mcell h0">z1₂</div>
+        <div class="mcell h0">z2₀</div><div class="mcell h0">z2₁</div><div class="mcell h0">z2₂</div>
+
+        <div class="mcell h0">z1₀</div>
+        <div class="mcell neg">excl</div><div class="mcell h1"></div><div class="mcell h1"></div>
+        <div class="mcell h4 pos">✓</div><div class="mcell h1"></div><div class="mcell h1"></div>
+
+        <div class="mcell h0">z1₁</div>
+        <div class="mcell h1"></div><div class="mcell neg">excl</div><div class="mcell h1"></div>
+        <div class="mcell h1"></div><div class="mcell h4 pos">✓</div><div class="mcell h1"></div>
+
+        <div class="mcell h0">z1₂</div>
+        <div class="mcell h1"></div><div class="mcell h1"></div><div class="mcell neg">excl</div>
+        <div class="mcell h1"></div><div class="mcell h1"></div><div class="mcell h4 pos">✓</div>
+
+        <div class="mcell h0">z2₀</div>
+        <div class="mcell h4 pos">✓</div><div class="mcell h1"></div><div class="mcell h1"></div>
+        <div class="mcell neg">excl</div><div class="mcell h1"></div><div class="mcell h1"></div>
+
+        <div class="mcell h0">z2₁</div>
+        <div class="mcell h1"></div><div class="mcell h4 pos">✓</div><div class="mcell h1"></div>
+        <div class="mcell h1"></div><div class="mcell neg">excl</div><div class="mcell h1"></div>
+
+        <div class="mcell h0">z2₂</div>
+        <div class="mcell h1"></div><div class="mcell h1"></div><div class="mcell h4 pos">✓</div>
+        <div class="mcell h1"></div><div class="mcell h1"></div><div class="mcell neg">excl</div>
+      </div>
+    </div>
+    <p class="diagram-caption"><code>labels = [3,4,5,0,1,2]</code> is exactly this ✓ pattern — cross-entropy pushes
+    each row's probability mass onto its ✓ cell and away from every other (negative) cell.</p>
+  </div>
+
+  <h2>Two entry points on the same model</h2>
+  <p><code>ContrastiveTransformerEncoder</code> deliberately exposes two different forward paths:</p>
+  <table class="cmp">
+    <tr><th>Method</th><th>Used for</th><th>Returns</th></tr>
+    <tr><td><code>forward(x, mask)</code></td><td>training, feeds <code>nt_xent_loss</code></td><td><code>(batch, proj_dim)</code> — through the projection head, L2-normalized</td></tr>
+    <tr><td><code>encode(x, mask)</code></td><td>inference / clustering / similarity search</td><td><code>(batch, d_model)</code> — richer, pre-projection representation</td></tr>
+  </table>
+  <div class="code-block">
+    <div class="file-tag">package/transformer.py</div>
+    <pre><code>def encode(self, x, mask=None):
+    x = self.embedding(x)
+    for layer in self.layers:
+        x = layer(x, self.freqs, mask)
+    x = self.norm(x)
+    # mean pool over real tokens only (mask: True = real, matching pad_and_mask)
+    x = (x * mask.unsqueeze(-1)).sum(dim=1) / mask.sum(dim=1, keepdim=True)
+    return x
+
+def forward(self, x, mask=None):
+    x = self.encode(x, mask)
+    x = self.proj_head(x)          # d_model → proj_dim, only needed for the contrastive loss
+    return F.normalize(x, dim=-1)  # unit length so dot product = cosine similarity</code></pre>
+  </div>
+  <p>The projection head is discarded after training — it's a scaffold that helps the loss, not part of the
+  representation you actually want to keep. This is standard practice in contrastive learning (SimCLR found the
+  pre-projection layer transfers better to downstream tasks than the projected space it was trained in).</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — pre-norm vs post-norm</div>
+    <p><code>package/transformer.py</code>'s <code>EncoderBlock</code> normalizes <em>before</em> each sub-layer
+    (<code>x = x + dropout(attn(norm1(x)))</code> — "pre-norm"), while <code>package/encoder_block.py</code>'s
+    <code>EncoderBlock</code> (Lessons 1–3, 6–7) normalizes <em>after</em> (<code>x = norm1(x + attn(x))</code> —
+    "post-norm"). Both are legitimate, widely-used transformer variants — pre-norm tends to train more stably at
+    depth, post-norm was the original 2017 paper's choice — but this repo uses one for the contrastive pipeline
+    and the other everywhere else. Worth knowing which one you're reading before assuming they're interchangeable
+    line-for-line.</p>
+  </div>
+
+  <h2>End to end: <code>main.py</code></h2>
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box"><span class="t">raw sequences</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">contrastive_collate_fn</span><span class="s">crop + pad</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box accent"><span class="t">model(x1,mask1)</span><span class="s">forward()</span></div>
+      <div class="flow-arrow">+</div>
+      <div class="flow-box accent"><span class="t">model(x2,mask2)</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">nt_xent_loss</span></div>
+    </div>
+    <p class="diagram-caption">repeated every batch, every epoch — this is the entire training loop in <code>main.py</code></p>
+  </div>
+  <div class="code-block">
+    <div class="file-tag">main.py — after training</div>
+    <pre><code>model.eval()
+padded, mask = pad_and_mask(sequences)
+with torch.no_grad():
+    embeddings = model.encode(padded, mask)     # (100, 64) — one vector per sequence
+
+reducer = umap.UMAP(n_components=3, random_state=42)
+coords = reducer.fit_transform(embeddings.cpu().numpy())
+fig = px.scatter_3d(df, x="x", y="y", z="z", hover_name="sample")
+fig.show()</code></pre>
+  </div>
+  <p>UMAP compresses the 64-dim embeddings to 3D purely for visualization — clusters you can see there should
+  reflect clusters that were actually useful in the original 64-dim space, not artifacts of the projection.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — no persistence in main.py, no validation anywhere</div>
+    <p><code>main.py</code> trains and plots in one run; it never calls <code>torch.save</code>. The only working
+    save/load round-trip in this repo lives in the scratch notebook <code>dev.ipynb</code>:
+    <code>torch.save(model.state_dict(), "model.pt")</code> then
+    <code>model.load_state_dict(torch.load("model.pt"))</code>. Also — like the two applied projects in Lessons
+    6–7 — there's no train/val split here, so "the loss went down" is the only signal you get that pretraining
+    worked. Lesson 8 covers concretely how to close both gaps.</p>
+  </div>
+
+  <div class="lesson-footer">
+    <a href="04-datasets-and-pipelines.html"><span class="dir">Back</span>Lesson 4 — Datasets &amp; Pipelines</a>
+    <a class="next" href="06-applied-decoder-insurance.html"><span class="dir">Next</span>Lesson 6 — Decoder Project →</a>
+  </div>
+</main>
+</body>
+</html>

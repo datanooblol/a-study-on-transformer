@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 9 — Beyond NLP</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html">1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html">2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html">3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html">4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html">5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html">6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html">7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html">8 · Validate &amp; Deploy</a>
+      <a class="pill current" href="09-beyond-nlp.html">9 · Beyond NLP</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 9 of 9</p>
+  <h1>Beyond NLP</h1>
+  <p class="subtitle">This repo's whole premise: none of the previous 8 lessons required text. A "token" is just
+  whatever you decide to embed into <code>d_model</code> before attention runs. Here's the same three blocks
+  applied to three domains that have nothing to do with insurance or language.</p>
+
+  <div class="files-box">
+    <span class="label">Base classes reused unmodified in every sketch below</span>
+    <ul>
+      <li><code>package/encoder_block.py</code> — <code>EncoderBlock</code></li>
+      <li><code>package/gpt_decoder_block.py</code> — <code>GPTDecoderBlock</code></li>
+    </ul>
+    <p style="margin: 8px 0 0; font-size: 0.82rem;">The code below is illustrative — sketches to build intuition, not runnable scripts in this repo.</p>
+  </div>
+
+  <h2>What "token" means, restated</h2>
+  <table class="cmp">
+    <tr><th>Domain</th><th>What one "token" is</th><th>What gets embedded</th><th>Architecture</th></tr>
+    <tr><td>This repo (insurance)</td><td>one purchase / claim / payment event</td><td>categorical id + continuous scalars, summed (Lesson 6)</td><td>decoder-only or encoder+CLS</td></tr>
+    <tr><td>Time-series forecasting</td><td>one timestep</td><td>continuous sensor/metric readings, projected</td><td>decoder-only (causal)</td></tr>
+    <tr><td>Tabular / multimodal rows</td><td>one column, or one whole row</td><td>per-column categorical/continuous embeddings, summed or attended across</td><td>encoder (with or without CLS)</td></tr>
+    <tr><td>Images (ViT)</td><td>one fixed-size image patch</td><td>flattened pixel patch, linearly projected</td><td>encoder + CLS</td></tr>
+  </table>
+
+  <h2>1. Time-series forecasting — the exact same causal pattern as Lesson 6</h2>
+  <p>Replace "purchase event" with "timestep." Replace policy/age/price with whatever continuous readings you're
+  forecasting. The causal mask, the shift-by-one target, the "read the last position" inference — none of that
+  changes.</p>
+
+  <div class="code-block">
+    <div class="file-tag">sketch — forecasting sensor readings</div>
+    <pre><code>class TimestepEmbedding(nn.Module):
+    """Analogous to EventEmbedding in package/insurance_decoder_block.py — just no categorical part."""
+    def __init__(self, num_features: int, d_model: int):
+        super().__init__()
+        self.proj = nn.Linear(num_features, d_model)
+
+    def forward(self, features):        # (batch, seq_len, num_features)
+        return self.proj(features)      # (batch, seq_len, d_model)
+
+
+class ForecastModel(nn.Module):
+    def __init__(self, num_features, d_model, n_heads, max_len):
+        super().__init__()
+        self.embed   = TimestepEmbedding(num_features, d_model)
+        self.decoder = GPTDecoderBlock(d_model, n_heads, max_len)   # unmodified import
+        self.head    = nn.Linear(d_model, num_features)             # predict next timestep's readings
+
+    def forward(self, x, pad_mask=None):
+        x = self.embed(x)
+        x = self.decoder(x, pad_mask)
+        return self.head(x)             # position i predicts timestep i+1 — same shift-by-one as Lesson 6</code></pre>
+  </div>
+  <p>Training loop, loss shifting, and inference (<code>predict()</code> reading the last position) all carry
+  over from Lesson 6 essentially unchanged.</p>
+
+  <h2>2. Tabular / multimodal fusion — a relabeling you've already seen</h2>
+  <p><code>EventEmbedding</code> (Lesson 6) and <code>InsuranceEncoderModel</code> (Lesson 7) are already doing
+  tabular fusion — they just call the columns "policy," "age," "price." Two ways to generalize this to an
+  arbitrary table:</p>
+  <ul>
+    <li><strong>Row-as-one-token</strong> (what this repo already does): embed each column, sum them into one
+    vector per row — cheap, and correct when columns mostly contribute independently.</li>
+    <li><strong>Row-as-a-sequence-of-columns</strong>: treat each column as its own token in a short sequence,
+    and let a real <code>EncoderBlock</code> attend across columns — useful when columns interact in ways a
+    simple sum can't capture (e.g. "price only matters combined with policy type").</li>
+  </ul>
+  <div class="code-block">
+    <div class="file-tag">sketch — columns as tokens, attending across a row</div>
+    <pre><code>class TabularRowEncoder(nn.Module):
+    def __init__(self, column_specs, d_model, n_heads):
+        super().__init__()
+        # column_specs: e.g. [("category", 5), ("continuous", None), ("continuous", None)]
+        self.col_embeds = nn.ModuleList([
+            nn.Embedding(n, d_model) if kind == "category" else nn.Linear(1, d_model)
+            for kind, n in column_specs
+        ])
+        self.encoder = EncoderBlock(d_model, n_heads, max_len=len(column_specs))
+
+    def forward(self, columns):   # columns: list of (batch,) or (batch,1) tensors, one per column
+        tokens = torch.stack([emb(col) for emb, col in zip(self.col_embeds, columns)], dim=1)
+        return self.encoder(tokens)   # (batch, num_columns, d_model) — attention across columns</code></pre>
+  </div>
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip</div>
+    <p>Columns don't have a natural left-to-right order the way a sentence or a purchase history does — RoPE's
+    "relative position" story is weaker here. It still runs (each column just gets a fixed position index), but
+    know that the positional signal is more of a fixed "column slot ID" than a meaningful notion of distance.</p>
+  </div>
+
+  <h2>3. Vision Transformer — the encoder block, completely unmodified</h2>
+  <p>Split an image into fixed-size patches, flatten each patch's pixels, project to <code>d_model</code> — now
+  you have a sequence of "tokens" and can reuse <code>package/encoder_block.py</code>'s <code>EncoderBlock</code>
+  and Lesson 3's CLS trick <strong>exactly as written</strong>, with zero changes to either.</p>
+
+  <div class="code-block">
+    <div class="file-tag">sketch — patches as tokens, CLS for classification</div>
+    <pre><code>class PatchEmbedding(nn.Module):
+    def __init__(self, patch_size, in_channels, d_model):
+        super().__init__()
+        # a strided conv is just "linearly project each non-overlapping patch" done efficiently
+        self.proj = nn.Conv2d(in_channels, d_model, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, images):                    # (batch, C, H, W)
+        x = self.proj(images)                     # (batch, d_model, H/patch, W/patch)
+        return x.flatten(2).transpose(1, 2)       # (batch, num_patches, d_model)
+
+
+class ViTClassifier(nn.Module):
+    def __init__(self, patch_size, in_channels, d_model, n_heads, num_patches, num_classes):
+        super().__init__()
+        self.patch_embed = PatchEmbedding(patch_size, in_channels, d_model)
+        self.cls         = nn.Parameter(torch.randn(1, 1, d_model))         # same idea as SequenceEncoder, Lesson 3
+        self.encoder     = EncoderBlock(d_model, n_heads, num_patches + 1)  # unmodified import
+        self.classifier  = nn.Linear(d_model, num_classes)
+
+    def forward(self, images):
+        x   = self.patch_embed(images)
+        cls = self.cls.expand(images.shape[0], -1, -1)
+        x   = torch.cat([cls, x], dim=1)
+        x   = self.encoder(x)              # no padding mask needed — every image has the same patch count
+        return self.classifier(x[:, 0])    # read CLS, exactly like Lesson 3</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box"><span class="t">image</span><span class="s">(C,H,W)</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">patches</span><span class="s">non-overlapping</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">Linear</span><span class="s">→ d_model per patch</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box accent"><span class="t">+ CLS</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box accent"><span class="t">EncoderBlock</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">read CLS</span><span class="s">→ classifier</span></div>
+    </div>
+    <p class="diagram-caption">Same shape as the insurance <code>SequenceEncoder</code> pipeline in Lesson 3 —
+    "tokens" here are just patches of pixels instead of purchase ids.</p>
+  </div>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — RoPE assumes 1D order</div>
+    <p>Flattening a 2D grid of patches into a 1D sequence (row-major, in the sketch above) throws away the
+    explicit 2D grid structure — patch 5 and patch 5+width-in-patches are vertically adjacent in the image but
+    RoPE only encodes their distance along the flattened 1D sequence. Real Vision Transformers typically use
+    2D-aware positional schemes for exactly this reason. The sketch above still works and is a fair
+    simplification for learning purposes — just know it's a simplification, not the state of the art.</p>
+  </div>
+
+  <h2>The takeaway for this whole curriculum</h2>
+  <p>Every lesson before this one taught mechanisms — attention, masking, RoPE, CLS pooling, padding, multi-task
+  losses, contrastive pretraining, validation. None of those mechanisms know or care that the tokens happened to
+  be insurance purchases. The only genuinely domain-specific code in this entire repo is the embedding layer at
+  the very front (how you turn your raw data into a <code>(batch, seq_len, d_model)</code> tensor) and the head
+  at the very back (how you turn a <code>d_model</code> vector back into an answer). Everything in between is
+  the reusable part — and that's the actual thesis of this repo.</p>
+
+  <div class="lesson-footer">
+    <a href="08-validation-and-deployment.html"><span class="dir">Back</span>Lesson 8 — Validate &amp; Deploy</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

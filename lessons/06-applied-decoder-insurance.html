@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 6 — Applied Decoder Project</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html">1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html">2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html">3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html">4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html">5 · Contrastive Pretraining</a>
+      <a class="pill current" href="06-applied-decoder-insurance.html">6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html">7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html">8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html">9 · Beyond NLP</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 6 of 9</p>
+  <h1>Applied Project: Next-Purchase Forecasting</h1>
+  <p class="subtitle">A decoder-only (GPT-style) model that reads a customer's purchase history and predicts
+  three things about their <em>next</em> purchase at once: which policy, at what age, for what price.</p>
+
+  <div class="files-box">
+    <span class="label">Files to open alongside this lesson</span>
+    <ul>
+      <li><code>package/insurance_decoder_block.py</code> — <code>EventEmbedding</code>, <code>InsuranceDecoderBlock</code></li>
+      <li><code>train_insurance.py</code> — mock data, <code>UncertaintyWeightedLoss</code>, training loop, <code>predict()</code></li>
+    </ul>
+  </div>
+
+  <h2>Step 1 — fuse three different feature types into one event vector</h2>
+  <p>Each purchase event has a categorical feature (<code>policy</code>) and two continuous features (<code>age</code>,
+  <code>price</code>). They can't share one embedding table, so each gets its own projection to <code>d_model</code>,
+  and the three are simply <strong>summed</strong> into one vector per event.</p>
+
+  <div class="code-block">
+    <div class="file-tag">package/insurance_decoder_block.py — EventEmbedding</div>
+    <pre><code>self.policy_emb = nn.Embedding(num_embeddings=num_policies, embedding_dim=d_model)
+self.age_proj   = nn.Linear(1, d_model)
+self.price_proj = nn.Linear(1, d_model)
+
+def forward(self, policy, age, price):
+    return self.policy_emb(policy) + self.age_proj(age) + self.price_proj(price)</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box"><span class="t">policy</span><span class="s">categorical id</span></div>
+      <div class="flow-box"><span class="t">age</span><span class="s">scalar</span></div>
+      <div class="flow-box"><span class="t">price</span><span class="s">scalar</span></div>
+    </div>
+    <div style="text-align:center; margin: 6px 0; color: var(--text-dim); font-size: 1.2rem;">↓ ↓ ↓</div>
+    <div class="flow">
+      <div class="flow-box"><span class="t">Embedding</span><span class="s">(num_policies, d_model)</span></div>
+      <div class="flow-box"><span class="t">Linear(1,d)</span></div>
+      <div class="flow-box"><span class="t">Linear(1,d)</span></div>
+    </div>
+    <div style="text-align:center; margin: 6px 0; color: var(--text-dim); font-size: 1.2rem;">+ (sum, not concat)</div>
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">event vector</span><span class="s">(d_model,) — one purchase</span></div>
+    </div>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip</div>
+    <p>Sum instead of concatenate keeps the vector at <code>d_model</code> regardless of how many feature types
+    you fuse — each projection just has to learn to occupy the shared space usefully. This is the same fusion
+    pattern used again in Lesson 7 and generalized in Lesson 9.</p>
+  </div>
+
+  <h2>Step 2 — causal decoding, shifted targets</h2>
+  <p>The sequence of event vectors goes through <code>MaskedSelfAttention</code> (Lesson 1/2) — each event only
+  sees itself and earlier events. That means position <code>i</code>'s output was built entirely from events
+  <code>0..i</code>, so it's exactly the right vector to use for predicting event <code>i+1</code>.</p>
+
+  <div class="diagram">
+    <div class="grid-label">customer history: A(25,105) → C(28,95) → A(31,110)</div>
+    <div class="token-row">
+      <div class="tok real">A<br><span style="font-size:.55rem">25/105</span></div>
+      <div class="tok real">C<br><span style="font-size:.55rem">28/95</span></div>
+      <div class="tok real">A<br><span style="font-size:.55rem">31/110</span></div>
+    </div>
+    <div class="grid-label" style="margin-top:10px;">predictions read from each position</div>
+    <div class="token-row">
+      <div class="tok cls">→C?</div>
+      <div class="tok cls">→A?</div>
+      <div class="tok cls">→C?<br><span style="font-size:.5rem">next purchase</span></div>
+    </div>
+    <p class="diagram-caption">position 0's output predicts event 1, position 1's predicts event 2, position 2's
+    (the last one) predicts the actual next purchase — the one nobody has observed yet.</p>
+  </div>
+
+  <div class="code-block">
+    <div class="file-tag">train_insurance.py — train()</div>
+    <pre><code># position i predicts event i+1 — shift targets by 1
+pred_policy = policy_logits[:, :-1]   # predictions from events 0..n-2
+tgt_policy  = policy[:, 1:]           # actual events 1..n-1
+
+loss_policy = policy_loss_fn(pred_policy.transpose(1, 2), tgt_policy)  # CrossEntropyLoss
+loss_age    = cont_loss_fn(pred_age, tgt_age)      # MSELoss
+loss_price  = cont_loss_fn(pred_price, tgt_price)  # MSELoss</code></pre>
+  </div>
+
+  <h2>Step 3 — three heads, three tasks, one shared trunk</h2>
+  <div class="code-block">
+    <div class="file-tag">package/insurance_decoder_block.py — InsuranceDecoderBlock</div>
+    <pre><code>self.policy_head = nn.Linear(d_model, num_policies)  # logits — classification
+self.age_head    = nn.Linear(d_model, 1)             # scalar — regression
+self.price_head  = nn.Linear(d_model, 1)             # scalar — regression</code></pre>
+  </div>
+  <p>Classification and regression losses live on completely different scales — cross-entropy might sit around
+  1–3, MSE on unnormalized prices could be in the tens of thousands. Adding them together naively would let
+  whichever loss has the biggest numbers dominate the gradient, regardless of which task actually needs more
+  attention.</p>
+
+  <h2>Learning how strictly to grade each task</h2>
+  <p>Instead of hand-tuning fixed loss weights, <code>UncertaintyWeightedLoss</code> makes each task's weight a
+  learned parameter — one that trades off automatically against how noisy/predictable that task turns out to be
+  (this is the homoscedastic uncertainty weighting idea from Kendall et al., 2018).</p>
+  <div class="code-block">
+    <div class="file-tag">train_insurance.py — UncertaintyWeightedLoss</div>
+    <pre><code>self.log_vars = nn.Parameter(torch.zeros(len(task_names)))  # start all tasks equally strict
+
+def forward(self, losses: dict):
+    total = 0.0
+    for i, name in enumerate(self.task_names):
+        precision = torch.exp(-self.log_vars[i])   # 1/sigma^2 — how strictly this task is graded
+        total    += precision * losses[name] + self.log_vars[i]
+    return total</code></pre>
+  </div>
+  <p>The <code>+ log_var</code> term is the regularizer that stops the model from just setting every precision
+  to zero to make the loss trivially small — pushing precision up costs something, so it only goes up if the
+  task's loss is actually shrinking in a way worth grading harder.</p>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip</div>
+    <p><code>loss_weigher.parameters()</code> gets added to the same optimizer as the model — the task weights
+    are trained by the exact same backprop step, not tuned separately.</p>
+  </div>
+
+  <h2>Normalizer — fit once, reuse everywhere</h2>
+  <div class="code-block">
+    <div class="file-tag">train_insurance.py</div>
+    <pre><code>age_normalizer.fit(all_ages)      # mean/std computed once, on the full training set
+...
+age_norm = age_normalizer.transform(age)          # before feeding the model
+...
+next_age = age_normalizer.inverse_transform(age_pred[0, -1]).item()   # back to real years</code></pre>
+  </div>
+  <p>The model only ever sees zero-mean, unit-variance numbers — this keeps age (tens) and price (hundreds) on
+  comparable scales so neither dominates gradient updates. <code>inverse_transform</code> converts predictions
+  back to real units for a human to read.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — refit vs reuse</div>
+    <p>The single most common way to silently break this pattern: calling <code>.fit()</code> again on new data
+    (e.g. a validation or production batch) instead of reusing the training-set <code>mean</code>/<code>std</code>.
+    Every number downstream — losses, predictions, the inverse-transformed output — becomes inconsistent with
+    what the model was actually trained on. <code>Normalizer</code> is fit exactly once, in <code>train()</code>,
+    on <code>all_ages</code>/<code>all_prices</code> from the full training set, and reused everywhere after.</p>
+  </div>
+
+  <h2>Inference: reading the last position</h2>
+  <div class="code-block">
+    <div class="file-tag">train_insurance.py — predict()</div>
+    <pre><code>policy_logits, age_pred, price_pred = model(policy, age_norm, price_norm)
+
+next_policy_id = policy_logits[0, -1].argmax().item()   # last position = the actual forecast
+next_age   = age_normalizer.inverse_transform(age_pred[0, -1]).item()
+next_price = price_normalizer.inverse_transform(price_pred[0, -1]).item()
+
+probs = policy_logits[0, -1].softmax(dim=-1)
+top3_probs, top3_ids = probs.topk(3)   # confidence, not just the argmax</code></pre>
+  </div>
+  <p>To add a new event to a customer's history, you don't retrain or reshape anything — just append to the
+  three input lists and re-run <code>predict()</code>; the causal mask means every earlier position's output is
+  unaffected by the new last event.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — mock data is intentionally easy</div>
+    <p>The two customer archetypes (A→C→A→C… young/cheap, B→D→B→D… older/expensive) are deterministic, noise-light
+    patterns designed to make the model converge fast and the predictions look obviously correct. Real purchase
+    histories won't have this clean a signal — treat the <em>plumbing</em> here (fusion, shift-by-one targets,
+    multi-task loss, normalization, inference) as the reusable part, not the specific numbers this model produces.</p>
+  </div>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Fuse mixed feature types by projecting each to <code>d_model</code> and summing.</li>
+    <li>Causal decoder + shift-by-one targets = next-event prediction, for free, at every position simultaneously.</li>
+    <li>Multi-task losses on different scales need weighting — learned uncertainty weights beat hand-tuned constants.</li>
+    <li>Normalize once on train data, reuse everywhere, inverse-transform only at the very end for humans to read.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="05-self-supervised-contrastive.html"><span class="dir">Back</span>Lesson 5 — Contrastive Pretraining</a>
+    <a class="next" href="07-applied-encoder-insurance.html"><span class="dir">Next</span>Lesson 7 — Encoder Project →</a>
+  </div>
+</main>
+</body>
+</html>

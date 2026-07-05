@@ -86,6 +86,30 @@ age_normalizer   = Normalizer()
 price_normalizer = Normalizer()
 
 
+# ── Uncertainty Weighted Loss ────────────────────────────────────────────────
+# instead of manually tuning loss weights, let the model learn how strictly
+# to grade each task based on how noisy/predictable each one is
+
+class UncertaintyWeightedLoss(nn.Module):
+    def __init__(self, task_names):
+        super().__init__()
+        self.task_names = task_names
+        # start all tasks as equally strict (log_var=0 → sigma=1 → precision=1)
+        self.log_vars = nn.Parameter(torch.zeros(len(task_names)))
+
+    def forward(self, losses: dict):
+        total = 0.0
+        for i, name in enumerate(self.task_names):
+            log_var   = self.log_vars[i]
+            precision = torch.exp(-log_var)   # 1 / sigma^2 — how strictly this task is graded
+            total    += precision * losses[name] + log_var
+        return total
+
+    def precisions(self):
+        # for logging — higher precision = model is grading this task more strictly
+        return {name: torch.exp(-self.log_vars[i]).item() for i, name in enumerate(self.task_names)}
+
+
 # ── Training ───────────────────────────────────────────────────────────────────
 def train():
     dataset    = InsuranceDataset(n_customers=500, seq_len=5)
@@ -99,8 +123,10 @@ def train():
     print(f"age   — mean: {age_normalizer.mean:.1f}, std: {age_normalizer.std:.1f}")
     print(f"price — mean: {price_normalizer.mean:.1f}, std: {price_normalizer.std:.1f}\n")
 
-    model     = InsuranceDecoderBlock(num_policies=10, d_model=64, n_heads=4, max_len=50)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    model        = InsuranceDecoderBlock(num_policies=10, d_model=64, n_heads=4, max_len=50)
+    loss_weigher = UncertaintyWeightedLoss(task_names=["policy", "age", "price"])
+    # include loss_weigher parameters so log_vars are trained alongside the model
+    optimizer    = torch.optim.Adam(list(model.parameters()) + list(loss_weigher.parameters()), lr=1e-3)
 
     policy_loss_fn = nn.CrossEntropyLoss()  # classification — next policy
     cont_loss_fn   = nn.MSELoss()           # regression — next age and price
@@ -130,7 +156,7 @@ def train():
             loss_age    = cont_loss_fn(pred_age, tgt_age)
             loss_price  = cont_loss_fn(pred_price, tgt_price)
 
-            loss = loss_policy + loss_age + loss_price
+            loss = loss_weigher({"policy": loss_policy, "age": loss_age, "price": loss_price})
 
             optimizer.zero_grad()
             loss.backward()
@@ -139,7 +165,7 @@ def train():
             total_loss += loss.item()
 
         if (epoch + 1) % 5 == 0:
-            print(f"epoch {epoch+1:3d} | loss {total_loss / len(dataloader):.4f}")
+            print(f"epoch {epoch+1:3d} | loss {total_loss / len(dataloader):.4f} | precisions {loss_weigher.precisions()}")
 
     return model
 
@@ -203,5 +229,12 @@ if __name__ == "__main__":
         customer_policies = ["A"],
         customer_ages     = [25.0],
         customer_prices   = [105.0],
-        name              = "Customer 3 (C-type)"
+        name              = "Customer 3 (A-type)"
+    )
+
+    predict(model,
+        customer_policies = ["B", "D",],
+        customer_ages     = [40.0, 43.0],
+        customer_prices   = [410.0, 390.0],
+        name              = "Customer 4 (B-type)"
     )

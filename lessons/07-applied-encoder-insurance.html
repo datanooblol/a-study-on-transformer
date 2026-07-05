@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 7 — Applied Encoder Project</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html">1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html">2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html">3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html">4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html">5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html">6 · Decoder Project</a>
+      <a class="pill current" href="07-applied-encoder-insurance.html">7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html">8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html">9 · Beyond NLP</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 7 of 9</p>
+  <h1>Applied Project: Claim-Amount Regression</h1>
+  <p class="subtitle">Three different sequence types (purchases, claims, payments) plus a static profile, fused
+  into one customer vector via three independent CLS-pooled encoders, to predict a single number: next year's
+  claim amount.</p>
+
+  <div class="files-box">
+    <span class="label">Files to open alongside this lesson</span>
+    <ul>
+      <li><code>train_insurance_representation_for_claim.py</code> — <code>SequenceEncoder</code>, <code>InsuranceEncoderModel</code></li>
+      <li><code>CLS_and_PAD.md</code> — the CLS mechanism itself (Lesson 3 covers this in depth)</li>
+    </ul>
+  </div>
+
+  <h2>One encoder per sequence type</h2>
+  <p>Purchases, claims, and payments are different vocabularies with different meanings and different lengths
+  (<code>MAX_PURCHASES=5</code>, <code>MAX_CLAIMS=5</code>, <code>MAX_PAYMENTS=8</code>) — so each gets its own
+  <code>SequenceEncoder</code> instance, each with its own embedding table and its own learnable CLS token
+  (Lesson 3). Age and income are just two numbers, so they get one small linear projection instead.</p>
+
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">purchase_encoder</span><span class="s">SequenceEncoder</span></div>
+      <div class="flow-box accent"><span class="t">claim_encoder</span><span class="s">SequenceEncoder</span></div>
+      <div class="flow-box accent"><span class="t">payment_encoder</span><span class="s">SequenceEncoder</span></div>
+      <div class="flow-box"><span class="t">profile_proj</span><span class="s">Linear(2, d/2)</span></div>
+    </div>
+    <div style="text-align:center; margin: 8px 0; color: var(--text-dim);">↓ each outputs a fixed-size vector — concatenate all four ↓</div>
+    <div class="flow">
+      <div class="flow-box"><span class="t">customer vector</span><span class="s">3×d_model + d_model/2</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box accent"><span class="t">regression head</span><span class="s">Linear → ReLU → Linear(1)</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">claim amount</span></div>
+    </div>
+  </div>
+
+  <div class="code-block">
+    <div class="file-tag">train_insurance_representation_for_claim.py — InsuranceEncoderModel.forward</div>
+    <pre><code>purchase_vec = self.purchase_encoder(purchases)   # (batch, d_model)
+claim_vec    = self.claim_encoder(claims)          # (batch, d_model)
+payment_vec  = self.payment_encoder(payments)      # (batch, d_model)
+profile_vec  = self.profile_proj(profile)          # (batch, d_model//2)
+
+customer = torch.cat([purchase_vec, claim_vec, payment_vec, profile_vec], dim=1)
+return self.head(customer)                         # (batch, 1)</code></pre>
+  </div>
+
+  <p>Notice this is the same "fuse several feature sources into one vector" idea as <code>EventEmbedding</code>
+  in Lesson 6 — the difference is Lesson 6 <strong>sums</strong> features that describe one event, while here
+  we <strong>concatenate</strong> summary vectors that each already represent a whole (different-length,
+  different-vocabulary) sequence. Sum when the pieces share a space and should blend; concatenate when they're
+  genuinely different kinds of information the head should be free to weight independently.</p>
+
+  <h2>Decoder project vs encoder project</h2>
+  <table class="cmp">
+    <tr><th></th><th>Lesson 6 — decoder</th><th>Lesson 7 — encoder</th></tr>
+    <tr><td>Architecture</td><td><code>gpt_decoder_block.py</code> + causal mask</td><td><code>encoder_block.py</code> + CLS + padding mask</td></tr>
+    <tr><td>Question asked</td><td>"what happens next?"</td><td>"what does this whole history imply?"</td></tr>
+    <tr><td>Reads</td><td>past events only, one direction</td><td>every event, both directions</td></tr>
+    <tr><td>Output read from</td><td>last position, every position during training</td><td>CLS position only</td></tr>
+    <tr><td>Number of input sequences fused</td><td>1 (one event stream, 3 features summed per event)</td><td>3 sequences + 1 static profile, concatenated</td></tr>
+    <tr><td>Output shape</td><td>3 predictions per position (policy/age/price)</td><td>1 scalar per customer (claim amount)</td></tr>
+  </table>
+
+  <h2>Normalizer — three independent fits</h2>
+  <div class="code-block">
+    <div class="file-tag">train_insurance_representation_for_claim.py — train()</div>
+    <pre><code>profiles = torch.stack([s[3] for s in dataset])   # (n, 2) — age, income
+age_normalizer.fit(profiles[:, 0])
+income_normalizer.fit(profiles[:, 1])
+claim_normalizer.fit(all_claims)</code></pre>
+  </div>
+  <p>Same discipline as Lesson 6: fit once on the training set, reuse for every <code>transform</code> and the
+  final <code>inverse_transform</code> at inference.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — dead code</div>
+    <p>Right above the snippet shown, <code>train()</code> also computes <code>all_ages = torch.stack([s[3] for s
+    in dataset])</code> and <code>all_incomes = torch.stack([s[3] for s in dataset])</code> — both grab index 3
+    (the full 2-element profile tensor, age <em>and</em> income together), and neither is ever used again; the
+    actual fitting happens on <code>profiles[:, 0]</code> / <code>profiles[:, 1]</code>, computed separately right
+    after. This is harmless (no bug — the correct values are fit), but it's leftover/redundant code: a good
+    reminder to double check that a variable is actually consumed before assuming it's doing something.</p>
+  </div>
+
+  <h2>Inference</h2>
+  <div class="code-block">
+    <div class="file-tag">train_insurance_representation_for_claim.py — predict()</div>
+    <pre><code>pred_norm = model(purchase_ids, claim_ids, payment_ids, profile_norm)
+pred_claim = claim_normalizer.inverse_transform(pred_norm[0]).item()</code></pre>
+  </div>
+  <p>One forward pass, one number out — no autoregressive loop needed, because this model was never designed to
+  generate a sequence, only to summarize one into a single prediction.</p>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Different sequence types (different vocab, different length) each get their own encoder + CLS — don't force them to share an embedding table.</li>
+    <li>Concatenate independent summary vectors when the head should learn to weight each source separately; sum when fusing features of one entity (Lesson 6).</li>
+    <li>Every regression target still needs its own <code>Normalizer</code>, fit once, reused consistently.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="06-applied-decoder-insurance.html"><span class="dir">Back</span>Lesson 6 — Decoder Project</a>
+    <a class="next" href="08-validation-and-deployment.html"><span class="dir">Next</span>Lesson 8 — Validate &amp; Deploy →</a>
+  </div>
+</main>
+</body>
+</html>

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 2 — Three Architectures</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html">1 · Attention &amp; RoPE</a>
+      <a class="pill current" href="02-three-architectures.html">2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html">3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html">4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html">5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html">6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html">7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html">8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html">9 · Beyond NLP</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 2 of 9</p>
+  <h1>Three Architectures, One Building Block</h1>
+  <p class="subtitle">BERT, the original "Attention Is All You Need" transformer, and GPT are not three different
+  inventions. They're the same attention block from Lesson 1, wired together three different ways.</p>
+
+  <div class="files-box">
+    <span class="label">Files to open alongside this lesson</span>
+    <ul>
+      <li><code>package/encoder_block.py</code> — <code>EncoderBlock</code></li>
+      <li><code>package/decoder_block.py</code> — <code>DecoderBlock</code> (adds cross-attention)</li>
+      <li><code>package/gpt_decoder_block.py</code> — <code>GPTDecoderBlock</code></li>
+      <li><code>README.md</code> — original write-up this lesson expands on</li>
+    </ul>
+  </div>
+
+  <h2>1. Encoder-only — bidirectional, no generation</h2>
+  <p>Every token attends freely to every other token, forward and backward. No causal mask. The output is one
+  rich vector per input token, all built with full context. There's nothing autoregressive here — it doesn't
+  generate anything, it <em>understands</em> the input.</p>
+
+  <div class="diagram">
+    <div class="stack">
+      <div class="stack-box">input x <span class="sub">(batch, src_len, d_model)</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">Multi-Head Self-Attention <span class="sub">every token sees every token</span></div>
+      <div class="stack-residual">x = norm1(x + attn(x))</div>
+      <div class="stack-box accent">FeedForward</div>
+      <div class="stack-residual">x = norm2(x + ffn(x))</div>
+      <div class="stack-box">output <span class="sub">(batch, src_len, d_model) — one vector per token</span></div>
+    </div>
+  </div>
+  <p><strong>Use cases:</strong> text classification, sentence embeddings, named entity recognition — anything
+  where you're understanding/representing input rather than producing new sequence output. <strong>Real-world
+  example:</strong> BERT.</p>
+
+  <h2>2. Encoder + Decoder — transform one sequence into another</h2>
+  <p>The encoder reads and compresses the source. The decoder generates the target one step at a time, but each
+  decoder layer does two different attentions: <strong>masked self-attention</strong> over its own past output,
+  then <strong>cross-attention</strong> where the decoder's Query looks at the encoder's Key/Value — this is the
+  literal mechanism of "translating," deciding which part of the source to focus on for each output token.</p>
+
+  <div class="diagram">
+    <div class="flow" style="margin-bottom:18px;">
+      <div class="flow-box accent"><span class="t">Encoder</span><span class="s">reads src, full attention</span></div>
+      <div class="flow-arrow">⇒ enc_out</div>
+      <div class="flow-box accent"><span class="t">Decoder</span><span class="s">generates tgt</span></div>
+    </div>
+    <div class="stack">
+      <div class="stack-box">decoder input x <span class="sub">(batch, tgt_len, d_model)</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">Masked Self-Attention <span class="sub">only its own past tokens</span></div>
+      <div class="stack-residual">x = norm1(x + masked_attn(x))</div>
+      <div class="stack-box accent">Cross-Attention <span class="sub">Q from x, K/V from enc_out</span></div>
+      <div class="stack-residual">x = norm2(x + cross_attn(x, enc_out))</div>
+      <div class="stack-box accent">FeedForward</div>
+      <div class="stack-residual">x = norm3(x + ffn(x))</div>
+      <div class="stack-box">output <span class="sub">(batch, tgt_len, d_model)</span></div>
+    </div>
+  </div>
+
+  <div class="code-block">
+    <div class="file-tag">package/decoder_block.py — CrossAttention.forward (the key lines)</div>
+    <pre><code># Q comes from decoder (x), K and V come from encoder (enc_out) — the only
+# structural difference from self-attention
+q = self.q_proj(x).view(batch, tgt_len, self.n_heads, self.head_dim).transpose(1, 2)
+k = self.k_proj(enc_out).view(batch, src_len, self.n_heads, self.head_dim).transpose(1, 2)
+v = self.v_proj(enc_out).view(batch, src_len, self.n_heads, self.head_dim).transpose(1, 2)
+
+# result is (batch, n_heads, tgt_len, src_len) — NOT square, because query and
+# key sequences have different lengths (decoder's tgt_len vs encoder's src_len)
+scores = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)</code></pre>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip</div>
+    <p>Cross-attention gets no RoPE in this codebase — Q and K come from two different sequences (target vs
+    source), so "relative position between them" isn't a coherent idea the way it is within one sequence.</p>
+  </div>
+
+  <p><strong>Use cases:</strong> machine translation, summarization, speech-to-text. <strong>Real-world example:</strong>
+  the original Transformer paper, encoding English and decoding French.</p>
+
+  <h2>3. Decoder-only (GPT-style) — causal, one sequence, no encoder</h2>
+  <p>Same shape as the encoder block, but with a causal mask added — each token attends to itself and everything
+  before it, never the future. There's no encoder and no cross-attention because there's nothing else to look
+  at; the model only ever conditions on its own past.</p>
+
+  <div class="diagram">
+    <div class="stack">
+      <div class="stack-box">input x <span class="sub">(batch, seq_len, d_model)</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">Masked Self-Attention <span class="sub">causal — no cross-attention</span></div>
+      <div class="stack-residual">x = norm1(x + attn(x))</div>
+      <div class="stack-box accent">FeedForward</div>
+      <div class="stack-residual">x = norm2(x + ffn(x))</div>
+      <div class="stack-box">output <span class="sub">(batch, seq_len, d_model) — position i built only from 0..i</span></div>
+    </div>
+  </div>
+  <p><strong>Use cases:</strong> text generation, code completion, chat. <strong>Real-world example:</strong> GPT
+  — stack many of these blocks, predict the next token from everything so far.</p>
+
+  <h2>How the three relate</h2>
+  <table class="cmp">
+    <tr><th>Architecture</th><th>Self-attn mask</th><th>Cross-attention</th><th>File</th><th>Applied project in this repo</th></tr>
+    <tr><td>Encoder-only</td><td>none (bidirectional)</td><td>—</td><td><code>encoder_block.py</code></td><td>Lessons 3, 5, 7</td></tr>
+    <tr><td>Encoder + Decoder</td><td>causal (decoder side)</td><td>yes</td><td><code>decoder_block.py</code></td><td>—</td></tr>
+    <tr><td>Decoder-only (GPT)</td><td>causal</td><td>none</td><td><code>gpt_decoder_block.py</code></td><td>Lesson 6</td></tr>
+  </table>
+  <p>Structurally: <code>EncoderBlock</code> + a causal mask = <code>GPTDecoderBlock</code>. <code>GPTDecoderBlock</code>
+  + a <code>CrossAttention</code> sub-layer (and its own norm) = <code>DecoderBlock</code>. That's the entire
+  difference — same attention math, same feed-forward, same residual+LayerNorm pattern, three different masks
+  and wiring choices.</p>
+
+  <div class="callout good">
+    <div class="callout-title">✓ Pattern worth reusing</div>
+    <p>Before reaching for a new architecture, ask which of these three problems you actually have: "represent
+    input" (encoder), "transform one sequence into a different one" (encoder-decoder), or "continue a sequence"
+    (decoder-only). Nearly everything in NLP and beyond maps onto one of these three.</p>
+  </div>
+
+  <div class="lesson-footer">
+    <a href="01-attention-and-rope.html"><span class="dir">Back</span>Lesson 1 — Attention &amp; RoPE</a>
+    <a class="next" href="03-cls-and-padding.html"><span class="dir">Next</span>Lesson 3 — CLS &amp; Padding →</a>
+  </div>
+</main>
+</body>
+</html>

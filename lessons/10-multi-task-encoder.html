@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 10 — Multi-Task Encoder</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill current" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 10 of 10</p>
+  <h1>Multi-Task Learning: One Encoder, Four Predictions</h1>
+  <p class="subtitle">A newer addition to the repo: take Lesson 7's exact encoder architecture and, instead of
+  predicting one number, predict four related numbers from the same shared customer vector — hard parameter
+  sharing, plus a second, more precise implementation of Lesson 6's uncertainty-weighted loss.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge enc"><span class="dot"></span>Encoder-only</span>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">↔ Study this back and forth with</div>
+    <p><a href="07-applied-encoder-insurance.html">Lesson 7 — Encoder Project</a> for the architecture this
+    extends (read that first if you haven't), and <a href="06-applied-decoder-insurance.html">Lesson 6 — Decoder
+    Project</a> for the first version of the uncertainty-weighted loss this lesson gives a second implementation
+    of. Both of those lessons now link forward to this one too — bounce between them as needed.</p>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to open alongside this lesson</span>
+    <ul>
+      <li><code>train_insurance_representation_for_multi_tasks.py</code> — <code>InsuranceEncoderModel</code>, <code>UncertaintyWeightedLoss</code></li>
+    </ul>
+  </div>
+
+  <h2>What actually changed from Lesson 7</h2>
+  <p>The backbone is untouched — three <code>SequenceEncoder</code>s (purchases, claims, payments) plus a profile
+  projection, concatenated into one customer vector, exactly as in
+  <a href="07-applied-encoder-insurance.html">Lesson 7</a>. The only structural change is at the very end: instead
+  of one regression head, there are four, and all four read from the same shared vector.</p>
+
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">purchase_encoder</span></div>
+      <div class="flow-box accent"><span class="t">claim_encoder</span></div>
+      <div class="flow-box accent"><span class="t">payment_encoder</span></div>
+      <div class="flow-box"><span class="t">profile_proj</span></div>
+    </div>
+    <div style="text-align:center; margin: 8px 0; color: var(--text-dim);">↓ concatenate — one shared customer vector ↓</div>
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">customer vector</span><span class="s">shared by all 4 heads</span></div>
+    </div>
+    <div style="text-align:center; margin: 8px 0; color: var(--text-dim);">↓ ↓ ↓ ↓ (same input, four independent heads)</div>
+    <div class="flow">
+      <div class="flow-box"><span class="t">claim_head</span><span class="s">claim amount</span></div>
+      <div class="flow-box"><span class="t">lapse_head</span><span class="s">lapse probability</span></div>
+      <div class="flow-box"><span class="t">pay_head</span><span class="s">premium payment</span></div>
+      <div class="flow-box"><span class="t">risk_head</span><span class="s">composite risk score</span></div>
+    </div>
+  </div>
+
+  <div class="code-block">
+    <div class="file-tag">train_insurance_representation_for_multi_tasks.py — InsuranceEncoderModel.forward</div>
+    <pre><code>customer = torch.cat([purchase_vec, claim_vec, payment_vec, profile_vec], dim=1)
+
+return (
+    self.claim_head(customer),   # (batch, 1)
+    self.lapse_head(customer),   # (batch, 1)
+    self.pay_head(customer),     # (batch, 1)
+    self.risk_head(customer),    # (batch, 1)
+)</code></pre>
+  </div>
+
+  <h2>Hard parameter sharing</h2>
+  <p>This is the standard name for what's happening here: one shared trunk (the customer vector), several
+  independent heads, all trained together with one combined loss. Every gradient update nudges the shared
+  encoder to be useful for <em>all four</em> tasks simultaneously, not just one.</p>
+  <table class="cmp">
+    <tr><th>Why it helps</th><th>Where it can hurt</th></tr>
+    <tr><td>Cheaper than training four separate encoders — one forward pass through the backbone serves all four heads.</td><td>If tasks pull in genuinely conflicting directions (<em>negative transfer</em>), forcing one shared representation can make every task slightly worse than training it alone.</td></tr>
+    <tr><td>Acts as a regularizer — a representation that has to be useful for four related targets is less likely to overfit to noise specific to just one.</td><td>Requires the tasks to actually be related. These four (claim amount, lapse probability, payment, risk score) all derive from the same underlying customer behavior, so sharing is a reasonable bet here.</td></tr>
+  </table>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip</div>
+    <p>Look at how the mock data is generated in <code>generate_customer()</code> — <code>claim_amount</code>,
+    <code>lapse_prob</code>, <code>pay_amount</code>, and <code>risk_score</code> are all functions of the same
+    underlying <code>hospital_count</code>, <code>late_count</code>, <code>age</code>, <code>income</code>
+    signals. That shared causal structure is exactly what makes hard parameter sharing a sound choice here, not
+    just a convenient one.</p>
+  </div>
+
+  <h2>A second implementation of uncertainty weighting</h2>
+  <p><a href="06-applied-decoder-insurance.html">Lesson 6</a> already covered <code>UncertaintyWeightedLoss</code> —
+  learn a per-task precision instead of hand-tuning fixed weights. This file reimplements the same idea, but not
+  identically:</p>
+
+  <table class="cmp">
+    <tr><th></th><th>Lesson 6 — <code>train_insurance.py</code></th><th>Here — <code>train_insurance_representation_for_multi_tasks.py</code></th></tr>
+    <tr><td>Input shape</td><td><code>dict</code> keyed by task name</td><td>plain <code>list</code>, order-dependent</td></tr>
+    <tr><td>Task mix</td><td>1 classification (policy) + 2 regression (age, price)</td><td>4 regression (claim, lapse, pay, risk)</td></tr>
+    <tr><td>Regularizer term</td><td><code>+ log_var</code> (no ½ factor)</td><td><code>+ 0.5 * log_var</code></td></tr>
+  </table>
+
+  <div class="code-block">
+    <div class="file-tag">train_insurance_representation_for_multi_tasks.py — UncertaintyWeightedLoss</div>
+    <pre><code>def forward(self, losses: list[torch.Tensor]) -> torch.Tensor:
+    total = 0.0
+    for i, loss in enumerate(losses):
+        precision = torch.exp(-self.log_vars[i])
+        total     = total + precision * loss + 0.5 * self.log_vars[i]
+    return total</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — two defensible, different formulas</div>
+    <p>This isn't a bug in either file — it's two different (correct, for what each is doing) approximations of
+    Kendall et al.'s multi-task uncertainty weighting (2018). The precise negative-log-likelihood term differs by
+    task's assumed noise distribution: for <strong>regression</strong> (Gaussian noise), the correct penalty is
+    <code>0.5 * log(σ²)</code> — what this file uses, and what you'd want for this file's four regression-only
+    targets. For <strong>classification</strong> (categorical noise), the commonly-used approximation drops the
+    ½ factor — closer to what <a href="06-applied-decoder-insurance.html">Lesson 6</a>'s version does, which is
+    mixing one classification task with two regression tasks and uses one formula for all three as a
+    simplification. Neither file is "wrong" for its own use case, but copying either one verbatim into a project
+    with a different task mix without checking this factor would quietly mis-calibrate the learned weights.</p>
+  </div>
+
+  <h2>Training loop — six normalizers instead of three</h2>
+  <p>Every regression target (and every continuous input) still gets its own independently-fit <code>Normalizer</code>
+  — the same fit-once-reuse-everywhere discipline as
+  <a href="06-applied-decoder-insurance.html">Lesson 6</a> and <a href="07-applied-encoder-insurance.html">Lesson 7</a>,
+  just scaled up to six instances instead of three.</p>
+  <div class="code-block">
+    <div class="file-tag">train_insurance_representation_for_multi_tasks.py — train()</div>
+    <pre><code>age_normalizer.fit(profiles[:, 0])
+income_normalizer.fit(profiles[:, 1])
+claim_normalizer.fit(torch.cat([s[4] for s in dataset]))
+lapse_normalizer.fit(torch.cat([s[5] for s in dataset]))
+pay_normalizer.fit(torch.cat([s[6] for s in dataset]))
+risk_normalizer.fit(torch.cat([s[7] for s in dataset]))
+...
+loss = loss_weigher([
+    mse(pred_claim, claim_norm),
+    mse(pred_lapse, lapse_norm),
+    mse(pred_pay,   pay_norm),
+    mse(pred_risk,  risk_norm),
+])</code></pre>
+  </div>
+  <p>The training loop also prints the four learned task weights every 5 epochs
+  (<code>torch.exp(-loss_weigher.log_vars)</code>) — worth watching directly: if one task's weight converges much
+  lower than the others, that's the model telling you that task is noisier or harder to predict from this input,
+  not that something is broken.</p>
+
+  <h2>Inference — four predictions, one forward pass</h2>
+  <div class="code-block">
+    <div class="file-tag">train_insurance_representation_for_multi_tasks.py — predict()</div>
+    <pre><code>pred_claim, pred_lapse, pred_pay, pred_risk = model(purchase_ids, claim_ids, payment_ids, profile_norm)
+
+print(f"  predicted claim amount : {claim_normalizer.inverse_transform(pred_claim[0]).item():.0f}")
+print(f"  predicted lapse prob   : {lapse_normalizer.inverse_transform(pred_lapse[0]).item():.3f}")
+print(f"  predicted pay amount   : {pay_normalizer.inverse_transform(pred_pay[0]).item():.0f}")
+print(f"  predicted risk score   : {risk_normalizer.inverse_transform(pred_risk[0]).item():.2f}")</code></pre>
+  </div>
+  <p>Same discipline as every other applied project in this repo: each output goes through its own
+  <code>inverse_transform</code> before being printed, so the numbers a human reads are back in real units
+  (currency, probability, score) instead of the normalized space the model actually operates in.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — still no validation split</div>
+    <p>Same gap as everywhere else in this repo (<a href="08-validation-and-deployment.html">Lesson 8</a>) —
+    <code>train()</code> here reports training loss only. With four tasks sharing one backbone, a held-out split
+    matters even more than in the single-task case: it's the only way to tell whether the shared representation
+    is actually generalizing, or whether one dominant task (watch the printed weights) is quietly overfitting
+    while dragging the others' apparent performance along with it.</p>
+  </div>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Hard parameter sharing = one shared trunk, several independent heads, trained jointly — cheap and regularizing when tasks are genuinely related.</li>
+    <li>Check the causal mix of your tasks (regression vs classification) before reusing an uncertainty-weighting formula wholesale from another project — the correct regularizer term depends on it.</li>
+    <li>Scaling to more targets means scaling the number of <code>Normalizer</code>s, not changing the pattern.</li>
+    <li>Watch the learned task weights during training — they're diagnostic, not just a training detail.</li>
+  </ul>
+
+  <p style="font-size:0.85rem; color:var(--text-dim);">Where to go from here: revisit
+  <a href="07-applied-encoder-insurance.html">Lesson 7</a> to compare the single-task and multi-task versions of
+  the exact same encoder side by side, or <a href="06-applied-decoder-insurance.html">Lesson 6</a> to compare the
+  two <code>UncertaintyWeightedLoss</code> implementations line by line.</p>
+
+  <div class="lesson-footer">
+    <a href="09-beyond-nlp.html"><span class="dir">Back</span>Lesson 9 — Beyond NLP</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

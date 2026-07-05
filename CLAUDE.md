@@ -18,6 +18,7 @@ The full study curriculum lives in **`lessons/index.html`** — open it in a bro
   - `rope.py` — standalone RoPE used by `transformer.py` only (see mask-convention note below)
 - `train_insurance.py` — decoder project: predict a customer's next purchase (policy/age/price) from their history
 - `train_insurance_representation_for_claim.py` — encoder project: predict next-year claim amount from full purchase/claim/payment history via CLS-pooled embeddings
+- `train_insurance_representation_for_multi_tasks.py` — same encoder backbone as above, extended to 4 regression heads (claim amount, lapse probability, payment, risk score) via hard parameter sharing, with a second `UncertaintyWeightedLoss` implementation (list-based, uses the `0.5 * log_var` regularizer term correct for all-regression task mixes — contrast with `train_insurance.py`'s dict-based version below)
 - `main.py` — contrastive pretraining entry point + UMAP embedding visualization
 - `README.md`, `CLS_and_PAD.md` — existing deep-dive write-ups (kept as reference; don't duplicate their content elsewhere, link to them)
 - `lessons/` — the visual study curriculum (HTML, one topic per file, start at `index.html`)
@@ -31,13 +32,18 @@ The full study curriculum lives in **`lessons/index.html`** — open it in a bro
 - `padding_idx=0` is reserved for PAD across every vocab (`policy_to_id`, `purchase_to_id`, etc. are 1-indexed for this reason).
 - RoPE rotates Q and K only, never V.
 - `RoPE`/`FeedForward` are intentionally re-implemented per file rather than imported from one shared module — this is a deliberate readability tradeoff for a study repo (each block file is self-contained and diffable against the others), not an oversight. A production codebase would share one module instead.
-- `Normalizer` (in both `train_insurance*.py` files) must be `.fit()` once on the training set and reused as-is for `.transform()`/`.inverse_transform()` everywhere else, including at inference — refitting per-batch or per-call will silently corrupt predictions.
+- `Normalizer` (in all three `train_insurance*.py` files) must be `.fit()` once on the training set and reused as-is for `.transform()`/`.inverse_transform()` everywhere else, including at inference — refitting per-batch or per-call will silently corrupt predictions.
+- **Two `UncertaintyWeightedLoss` implementations coexist, both correct for their own use case — don't copy one verbatim into a project with a different task mix:**
+  - `train_insurance.py`: dict-keyed, mixes 1 classification + 2 regression tasks, uses `+ log_var` (no `0.5` factor).
+  - `train_insurance_representation_for_multi_tasks.py`: list-keyed, 4 regression-only tasks, uses `+ 0.5 * log_var` (the precise Kendall et al. 2018 term for Gaussian/regression noise).
+  - See `lessons/10-multi-task-encoder.html` for the full comparison.
 - None of the training scripts currently hold out a validation split — see `lessons/08-validation-and-deployment.html` before adding new training code, so validation is added consistently.
 
 ## Running things
 
 ```bash
-python train_insurance.py                              # decoder: next-purchase prediction
-python train_insurance_representation_for_claim.py      # encoder: claim-amount regression
-python main.py                                          # contrastive pretraining + UMAP plot (needs umap-learn, plotly, pandas)
+python train_insurance.py                                     # decoder: next-purchase prediction
+python train_insurance_representation_for_claim.py            # encoder: claim-amount regression (single task)
+python train_insurance_representation_for_multi_tasks.py      # encoder: claim/lapse/payment/risk (multi-task, hard parameter sharing)
+python main.py                                                # contrastive pretraining + UMAP plot (needs umap-learn, plotly, pandas)
 ```

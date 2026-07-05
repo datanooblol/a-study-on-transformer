@@ -22,12 +22,13 @@
       <a class="pill current" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
       <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 7 of 9</p>
+  <p class="eyebrow">Lesson 7 of 10</p>
   <h1>Applied Project: Claim-Amount Regression</h1>
   <p class="subtitle">Three different sequence types (purchases, claims, payments) plus a static profile, fused
   into one customer vector via three independent CLS-pooled encoders, to predict a single number: next year's
@@ -125,6 +126,14 @@ pred_claim = claim_normalizer.inverse_transform(pred_norm[0]).item()</code></pre
   </div>
   <p>One forward pass, one number out — no autoregressive loop needed, because this model was never designed to
   generate a sequence, only to summarize one into a single prediction.</p>
+
+  <div class="callout good">
+    <div class="callout-title">↔ See also</div>
+    <p>This model predicts exactly one target from the fused customer vector. <a href="10-multi-task-encoder.html">Lesson 10</a>
+    takes this identical backbone and adds three more regression heads reading from that same vector — one shared
+    representation, four predictions at once (<em>hard parameter sharing</em>), worth reading right after this
+    to see how little has to change to go from one target to four.</p>
+  </div>
 
   <h2>Checklist</h2>
   <ul>

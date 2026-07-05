@@ -22,6 +22,7 @@
       <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
       <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
     </nav>
   </div>
 </header>
@@ -30,8 +31,9 @@
   <p class="eyebrow">Study Curriculum</p>
   <h1>A Study on Transformer</h1>
   <p class="subtitle">Understanding transformer architecture inside out — not as a language model, but as a general
-  sequence-processing pattern applied to insurance customer data. Nine lessons, each grounded in the actual code
-  in this repo, ending in two examples of the pattern applied outside insurance/NLP entirely.</p>
+  sequence-processing pattern applied to insurance customer data. Ten lessons, each grounded in the actual code
+  in this repo, covering two examples of the pattern applied outside insurance/NLP entirely and a multi-task
+  extension of the encoder project.</p>
 
   <h2>How to use this</h2>
   <p>Read the lessons in order the first time — each one builds on the last. After that, use the pill nav above
@@ -79,8 +81,12 @@
       <div class="flow-box accent"><span class="t">Lesson 6</span><span class="s">next-purchase forecast (decoder)</span></div>
       <div class="flow-box accent"><span class="t">Lesson 7</span><span class="s">claim regression (encoder + CLS)</span></div>
     </div>
+    <div style="text-align:center; margin: 6px 0; color: var(--text-dim); font-size: 0.85rem;">↓ Lesson 7's backbone, extended ↓</div>
+    <div class="flow" style="margin: 0 0 4px;">
+      <div class="flow-box accent"><span class="t">Lesson 10</span><span class="s">1 target → 4, hard parameter sharing</span></div>
+    </div>
     <div class="stack" style="margin-top: 8px;">
-      <div class="stack-arrow">↓ all three feed into</div>
+      <div class="stack-arrow">↓ every project above (5, 6, 7, 10) feeds into</div>
       <div class="stack-box">Lesson 8 — Validate &amp; Deploy<span class="sub">what's missing today, and how to add it</span></div>
       <div class="stack-arrow">↓</div>
       <div class="stack-box">Lesson 9 — Beyond NLP<span class="sub">time-series, tabular fusion, vision — same blocks, new tokens</span></div>
@@ -109,6 +115,7 @@
     <tr><td>7</td><td><a href="07-applied-encoder-insurance.html">Encoder Project</a></td><td><span class="arch-badge enc inline"><span class="dot"></span>Encoder-only</span></td><td>How do you predict one number from an entire multi-sequence history?</td></tr>
     <tr><td>8</td><td><a href="08-validation-and-deployment.html">Validate &amp; Deploy</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>How do you know the model actually works, and what does shipping it look like?</td></tr>
     <tr><td>9</td><td><a href="09-beyond-nlp.html">Beyond NLP</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Mixed</span></td><td>What else is "just a sequence of tokens" — time-series, tabular rows, image patches?</td></tr>
+    <tr><td>10</td><td><a href="10-multi-task-encoder.html">Multi-Task Encoder</a></td><td><span class="arch-badge enc inline"><span class="dot"></span>Encoder-only</span></td><td>What changes when one shared representation has to predict four related things instead of one?</td></tr>
   </table>
 
   <h2>Repo map</h2>
@@ -120,6 +127,7 @@
       <li><code>package/data_loader.py</code>, <code>collate.py</code>, <code>pad_and_mask.py</code> — lesson 4</li>
       <li><code>package/contrastive_loss.py</code>, <code>transformer.py</code>, <code>main.py</code> — lesson 5</li>
       <li><code>train_insurance_representation_for_claim.py</code>, <code>CLS_and_PAD.md</code> — lessons 3, 7</li>
+      <li><code>train_insurance_representation_for_multi_tasks.py</code> — lesson 10</li>
       <li><code>dev.ipynb</code>, <code>transformer_encode_block.ipynb</code> — scratch notebooks referenced in lessons 1, 5, 8</li>
     </ul>
   </div>

@@ -22,12 +22,13 @@
       <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
       <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 6 of 9</p>
+  <p class="eyebrow">Lesson 6 of 10</p>
   <h1>Applied Project: Next-Purchase Forecasting</h1>
   <p class="subtitle">A decoder-only (GPT-style) model that reads a customer's purchase history and predicts
   three things about their <em>next</em> purchase at once: which policy, at what age, for what price.</p>
@@ -152,6 +153,13 @@ def forward(self, losses: dict):
     <div class="callout-title">💡 Tip</div>
     <p><code>loss_weigher.parameters()</code> gets added to the same optimizer as the model — the task weights
     are trained by the exact same backprop step, not tuned separately.</p>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">↔ See also</div>
+    <p><a href="10-multi-task-encoder.html">Lesson 10</a> reuses this exact idea for a four-target
+    <em>encoder</em> project, but with a subtly different (and, for that file's all-regression task mix, more
+    precise) version of this formula — worth comparing the two implementations side by side once you've read it.</p>
   </div>
 
   <h2>Normalizer — fit once, reuse everywhere</h2>

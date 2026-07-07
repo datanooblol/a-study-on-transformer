@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 13 — Reading Training Signals</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill current" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 13 of 14</p>
+  <h1>Reading Training Signals</h1>
+  <p class="subtitle">A model that runs without crashing hasn't told you anything yet. This lesson is about the
+  difference between "it works" and "it's actually learning something useful" — using a real 50-epoch training
+  run (numbers, not a hypothetical) as the running example.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core concept — applies to any training run, any architecture</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Related lessons to read alongside this one</span>
+    <ul>
+      <li><a href="08-validation-and-deployment.html">Lesson 8</a> — why a validation split exists in the first place; this lesson is about what to actually do with it once you have one</li>
+      <li><a href="10-multi-task-encoder.html">Lesson 10</a> — the learned uncertainty weights this lesson reads as a diagnostic signal, not just a training detail</li>
+    </ul>
+  </div>
+
+  <h2>The run in question</h2>
+  <p>A real encoder+CLS multi-task model, trained for 50 epochs, checked every 5:</p>
+  <table class="cmp">
+    <tr><th>Epoch</th><th>Train loss</th><th>Val item acc</th><th>Val age MAE</th><th>Val price MAE</th><th>Val sum_insure MAE</th></tr>
+    <tr><td>5</td><td>3.02</td><td>19.6%</td><td>1.22</td><td>1,689</td><td>30,703</td></tr>
+    <tr><td>10</td><td>2.79</td><td>21.4%</td><td>1.24</td><td>1,691</td><td>31,871</td></tr>
+    <tr><td>20</td><td>2.39</td><td>21.4%</td><td>1.23</td><td>1,705</td><td>32,580</td></tr>
+    <tr><td>30</td><td>1.84</td><td>21.1%</td><td>1.23</td><td>1,785</td><td>30,705</td></tr>
+    <tr><td>40</td><td>1.36</td><td>18.2%</td><td>1.23</td><td>1,749</td><td>31,678</td></tr>
+    <tr><td>50</td><td>0.90</td><td>18.6%</td><td>1.25</td><td>1,862</td><td>34,043</td></tr>
+  </table>
+  <p>At a glance this looks fine — the loss number in the leftmost column is dropping the whole time, which is
+  the number most people watch. That's exactly the trap.</p>
+
+  <h2>Signal 1 — train loss falling while validation stalls or worsens</h2>
+  <p>Read the other five columns instead. Item accuracy never really moves past its epoch-10 level. Age MAE is
+  frozen to two decimal places. Price and sum_insure MAE are both <em>higher</em> at epoch 50 than at epoch 5.
+  Meanwhile train loss fell by more than two-thirds. That specific combination — training loss steadily
+  improving, validation metrics flat or degrading — is the signature of <strong>overfitting</strong>: the model
+  is getting better at the training set specifically, in ways that don't transfer to customers it hasn't seen.</p>
+
+  <div class="diagram">
+    <svg viewBox="0 0 320 120" width="320" height="120" style="display:block;margin:0 auto;">
+      <line x1="20" y1="10" x2="20" y2="105" stroke="var(--border)" stroke-width="1"/>
+      <line x1="20" y1="105" x2="310" y2="105" stroke="var(--border)" stroke-width="1"/>
+      <polyline points="20,25 80,40 140,55 200,68 260,80 300,90" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+      <polyline points="20,55 80,45 140,60 200,42 260,58 300,50" fill="none" stroke="var(--dec-color)" stroke-width="2.5"/>
+      <text x="305" y="93" font-size="9" fill="var(--accent)">train loss</text>
+      <text x="305" y="53" font-size="9" fill="var(--dec-color)">val accuracy</text>
+      <text x="5" y="15" font-size="9" fill="var(--text-dim)">better</text>
+      <text x="5" y="108" font-size="9" fill="var(--text-dim)">worse</text>
+      <text x="140" y="118" font-size="9" fill="var(--text-dim)">epoch →</text>
+    </svg>
+    <p class="diagram-caption">Illustrative shape of the pattern above (not pixel-exact) — a smooth, steadily
+    improving line next to a noisy, flat one is the shape to learn to recognize on sight.</p>
+  </div>
+
+  <h2>Signal 2 — a learned weight racing away from the others</h2>
+  <p>The same run's <a href="10-multi-task-encoder.html">uncertainty-weighted loss</a> was printing its learned
+  task weights every 5 epochs. The <code>age</code> weight alone:</p>
+  <table class="cmp">
+    <tr><th>Epoch</th><th>5</th><th>10</th><th>20</th><th>30</th><th>40</th><th>50</th></tr>
+    <tr><td>Learned age weight</td><td>1.26</td><td>1.57</td><td>2.46</td><td>3.80</td><td>5.80</td><td>8.71</td></tr>
+  </table>
+  <p>Nearly a <strong>7× increase</strong> — while age's own validation MAE never moved from ~1.23. This is
+  worth understanding mechanistically, not just noticing: the weight (precision) is learned from how small the
+  <em>training</em> loss for that task is getting, and training loss can keep shrinking from memorization long
+  after real generalization has stopped improving. The mechanism has no way to tell the difference between
+  "genuinely getting better at this task" and "increasingly memorizing this task's training examples" — both
+  look identical from where it's standing.</p>
+
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">Training loss ↓</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box accent"><span class="t">Learned precision ↑</span></div>
+    </div>
+    <p class="diagram-caption">This link is real and intentional (Lesson 10). But nothing in it checks whether
+    <em>validation</em> performance improved too — a task's weight can climb from pure memorization just as
+    easily as from genuine learning.</p>
+  </div>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Worth knowing — a real limitation of uncertainty weighting</div>
+    <p>A task's learned weight climbing steadily is not, by itself, good news. Read it next to that task's
+    <em>validation</em> metric. Weight climbing + validation metric improving = genuine, working automatic
+    balancing. Weight climbing + validation metric flat or worse = that task quietly overfitting, and dragging a
+    growing share of the combined gradient toward memorization as it goes.</p>
+  </div>
+
+  <h2>Signal 3 — context: is the model even doing better than nothing?</h2>
+  <p>19-21% item accuracy sounds low, but low compared to what? With 8 real items, guessing uniformly at random
+  gets ~12.5%. A <strong>naive baseline</strong> — the simplest possible non-model answer — is the number every
+  other result has to be compared against, not zero.</p>
+  <table class="cmp">
+    <tr><th>Task</th><th>Naive baseline</th><th>What it tells you</th></tr>
+    <tr><td>Classification (next item)</td><td>Accuracy of guessing the most frequent class, or uniform random</td><td>If the model barely beats this, it hasn't learned the pattern — or the pattern is barely learnable at all (see Signal 4)</td></tr>
+    <tr><td>Regression (next age)</td><td>MAE of always predicting the training-set mean, or always predicting "no change from current value"</td><td>A model that can't beat "predict no change" isn't earning its complexity</td></tr>
+  </table>
+  <p>Without computing this number first, "21% accuracy" and "1862 price MAE" are both unfalsifiable — they
+  sound bad or fine purely based on intuition, not evidence.</p>
+
+  <h2>Signal 4 — is the task itself noisy? (a ceiling, not a bug)</h2>
+  <p>Sometimes a model plateauing near a naive baseline isn't underfitting — it's because the data-generating
+  process itself has a low ceiling. Revisit <code>sample_category()</code> from earlier: at a mid-range age,
+  the five category weights land close to <code>0.6–0.86</code> — nearly uniform. If the process generating the
+  label is itself close to a coin flip most of the time, no model, however well trained, can push accuracy far
+  above what that randomness allows. This was a deliberate design choice (soft, noisy preference instead of a
+  hard customer archetype, precisely to avoid an unrealistically easy task) — and it may have gone far enough
+  that the task's true ceiling is genuinely close to where the model already sits.</p>
+
+  <div class="callout good">
+    <div class="callout-title">✓ How to tell "ceiling" apart from "underfitting"</div>
+    <p>Compute the naive baseline directly from the known generating weights, not just from the raw label
+    frequencies. If it lands close to what the trained model achieves, the task is noisy and the model is
+    probably fine. If the naive baseline is clearly beatable and the model isn't beating it, that's a real
+    modeling gap — capacity, hyperparameters, or training length — not an inherent ceiling.</p>
+  </div>
+
+  <h2>Putting it together</h2>
+  <div class="diagram">
+    <div class="stack">
+      <div class="stack-box accent">Is validation performance improving alongside training loss?</div>
+      <div class="stack-arrow">↓</div>
+    </div>
+    <div class="flow" style="margin: 8px 0 4px;">
+      <div class="flow-box"><span class="t">No</span><span class="s">train ↓, val flat/worse</span></div>
+      <div class="flow-box"><span class="t">Yes</span><span class="s">both improving together</span></div>
+    </div>
+    <div class="flow" style="margin: 4px 0 12px;">
+      <div class="flow-box accent"><span class="t">Overfitting</span><span class="s">check checkpoint, early stopping</span></div>
+      <div class="flow-box accent"><span class="t">Keep going</span><span class="s">or diminishing returns?</span></div>
+    </div>
+    <div class="stack">
+      <div class="stack-box accent">Is validation performance close to the naive baseline?</div>
+      <div class="stack-arrow">↓</div>
+    </div>
+    <div class="flow" style="margin: 8px 0 0;">
+      <div class="flow-box"><span class="t">Yes</span><span class="s">check if the task is inherently noisy</span></div>
+      <div class="flow-box"><span class="t">No, baseline is clearly beatable</span><span class="s">real room to improve the model</span></div>
+    </div>
+  </div>
+
+  <h2>What to actually change because of this</h2>
+  <ul>
+    <li><strong>Track the best validation checkpoint, not the final epoch.</strong> In the run above, epoch 10-20 was already as good as this configuration gets on every metric — everything after was pure overfitting. Training a fixed epoch count and keeping whatever comes out last throws away the actual best model you had.</li>
+    <li><strong>Consider early stopping</strong> — once validation metrics stop improving for several checks in a row, more epochs are buying overfitting, not progress.</li>
+    <li><strong>Compute the naive baseline before judging any result</strong> — for classification, most-frequent-class or random-guess accuracy; for regression, MAE of predicting the mean or predicting "no change."</li>
+    <li><strong>Watch learned uncertainty weights next to their own task's validation metric</strong>, not in isolation — a climbing weight is only good news if validation is climbing with it.</li>
+  </ul>
+  <p style="font-size:0.85rem; color:var(--text-dim);">These four are diagnostic principles — knowing what to look
+  for. <a href="14-baselines-and-checkpointing.html">Lesson 14</a> is the concrete follow-up: working code for a
+  real theoretical baseline (computed from this repo's own mock-data generator) and a full checkpoint-tracking /
+  early-stopping implementation, ready to fold into any training loop.</p>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Overfitting</dt>
+    <dd>A model improving on training data in ways that don't transfer to unseen data — the classic signature is training loss falling while validation metrics stay flat or worsen.</dd>
+
+    <dt>Naive baseline</dt>
+    <dd>The simplest possible non-model answer (random guess, most-frequent-class, predict-the-mean, predict-no-change) — the number every real result should be compared against before being called good or bad.</dd>
+
+    <dt>Ceiling effect</dt>
+    <dd>When the process generating the labels is itself noisy or partly random, no model can push accuracy far past whatever that randomness allows — low performance here reflects the data, not a broken model.</dd>
+
+    <dt>Early stopping</dt>
+    <dd>Halting training once validation performance stops improving, instead of running a fixed number of epochs regardless of what's actually happening on held-out data.</dd>
+
+    <dt>Checkpoint selection</dt>
+    <dd>Saving and keeping the model weights from whichever epoch had the best validation performance, rather than assuming the final epoch is the best one.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Never judge a training run from the loss curve alone — read every validation metric next to it.</li>
+    <li>Train loss falling + validation flat or worse, at the same time, is overfitting — not a healthy run that just needs patience.</li>
+    <li>A learned task weight climbing is only meaningful next to that task's own validation trend.</li>
+    <li>Always compute a naive baseline before deciding a number is good or bad.</li>
+    <li>Low performance can mean an underfit model, or a genuinely noisy task — the naive baseline is what tells them apart.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="12-asymmetric-losses-and-constraints.html"><span class="dir">Back</span>Lesson 12 — Asymmetric Losses</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

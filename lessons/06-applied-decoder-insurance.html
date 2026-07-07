@@ -23,12 +23,16 @@
       <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
       <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 6 of 10</p>
+  <p class="eyebrow">Lesson 6 of 14</p>
   <h1>Applied Project: Next-Purchase Forecasting</h1>
   <p class="subtitle">A decoder-only (GPT-style) model that reads a customer's purchase history and predicts
   three things about their <em>next</em> purchase at once: which policy, at what age, for what price.</p>
@@ -117,6 +121,10 @@ loss_policy = policy_loss_fn(pred_policy.transpose(1, 2), tgt_policy)  # CrossEn
 loss_age    = cont_loss_fn(pred_age, tgt_age)      # MSELoss
 loss_price  = cont_loss_fn(pred_price, tgt_price)  # MSELoss</code></pre>
   </div>
+  <p style="font-size:0.85rem; color:var(--text-dim);"><code>MSELoss</code> here treats predicting age/price too
+  high and too low as equally bad — a reasonable default. See <a href="12-asymmetric-losses-and-constraints.html">Lesson 12</a>
+  for when that assumption breaks down (e.g. a value like age that can only move in one direction) and what to do
+  about it instead.</p>
 
   <h2>Step 3 — three heads, three tasks, one shared trunk</h2>
   <div class="code-block">

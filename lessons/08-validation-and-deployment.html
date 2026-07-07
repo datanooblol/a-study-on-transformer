@@ -23,12 +23,16 @@
       <a class="pill current" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
       <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 8 of 10</p>
+  <p class="eyebrow">Lesson 8 of 14</p>
   <h1>Validation &amp; Deployment</h1>
   <p class="subtitle">This is the one lesson that's not documenting something already in the repo — it's naming
   a real gap across all three training scripts and giving you a concrete way to close it.</p>
@@ -101,6 +105,11 @@ model.train()   # switch back before the next training epoch</code></pre>
     <tr><td>Lesson 7 — encoder</td><td>claim amount (regression)</td><td>MAE in currency, after <code>claim_normalizer.inverse_transform</code></td></tr>
     <tr><td>Lesson 5 — contrastive</td><td>embedding quality (no labels)</td><td>no ground truth exists — the closest proxy is whether known-similar sequences end up with high cosine similarity; qualitative UMAP inspection is what <code>main.py</code> already does</td></tr>
   </table>
+  <p style="font-size:0.85rem; color:var(--text-dim);">Tracking these metrics is only half the job — <a href="13-reading-training-signals.html">Lesson 13</a>
+  covers how to actually read them once you have them: spotting overfitting from the gap between training loss
+  and these validation numbers, and knowing what a "good" number even means via a naive baseline.
+  <a href="14-baselines-and-checkpointing.html">Lesson 14</a> then turns that into working code — a real baseline
+  computed from known data, plus checkpoint tracking so the model you keep is the best one, not just the last.</p>
 
   <h2>Checkpointing — the pattern that already exists, just not in the training scripts</h2>
   <p><code>dev.ipynb</code> already has a working save/load round-trip. This is the pattern to lift into any

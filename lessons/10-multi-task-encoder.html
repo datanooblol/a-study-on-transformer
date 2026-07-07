@@ -23,12 +23,16 @@
       <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
       <a class="pill current" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 10 of 10</p>
+  <p class="eyebrow">Lesson 10 of 14</p>
   <h1>Multi-Task Learning: One Encoder, Four Predictions</h1>
   <p class="subtitle">A newer addition to the repo: take Lesson 7's exact encoder architecture and, instead of
   predicting one number, predict four related numbers from the same shared customer vector — hard parameter
@@ -169,7 +173,15 @@ loss = loss_weigher([
   <p>The training loop also prints the four learned task weights every 5 epochs
   (<code>torch.exp(-loss_weigher.log_vars)</code>) — worth watching directly: if one task's weight converges much
   lower than the others, that's the model telling you that task is noisier or harder to predict from this input,
-  not that something is broken.</p>
+  not that something is broken. The reverse is also worth watching for — a weight climbing steadily is only good
+  news if that task's <em>validation</em> metric is improving alongside it; see
+  <a href="13-reading-training-signals.html">Lesson 13</a> for a real run where a weight nearly 7×'d while its
+  validation performance never moved, which is the opposite of reassuring.</p>
+
+  <p style="font-size:0.85rem; color:var(--text-dim);">All four heads use plain <code>mse</code> here, which
+  assumes over- and under-predicting each target costs the same. <a href="12-asymmetric-losses-and-constraints.html">Lesson 12</a>
+  covers what to do when that assumption doesn't hold for one of your targets — asymmetric loss shaping, and
+  reparametrizing the output entirely when a direction is truly impossible rather than just costlier.</p>
 
   <h2>Inference — four predictions, one forward pass</h2>
   <div class="code-block">
@@ -209,7 +221,7 @@ print(f"  predicted risk score   : {risk_normalizer.inverse_transform(pred_risk[
 
   <div class="lesson-footer">
     <a href="09-beyond-nlp.html"><span class="dir">Back</span>Lesson 9 — Beyond NLP</a>
-    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+    <a class="next" href="11-bert-pretraining-finetuning.html"><span class="dir">Next</span>Lesson 11 — BERT →</a>
   </div>
 </main>
 </body>

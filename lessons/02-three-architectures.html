@@ -23,12 +23,16 @@
       <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
       <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 2 of 10</p>
+  <p class="eyebrow">Lesson 2 of 14</p>
   <h1>Three Architectures, One Building Block</h1>
   <p class="subtitle">BERT, the original "Attention Is All You Need" transformer, and GPT are not three different
   inventions. They're the same attention block from Lesson 1, wired together three different ways.</p>
@@ -67,7 +71,8 @@
   </div>
   <p><strong>Use cases:</strong> text classification, sentence embeddings, named entity recognition — anything
   where you're understanding/representing input rather than producing new sequence output. <strong>Real-world
-  example:</strong> BERT.</p>
+  example:</strong> BERT — see <a href="11-bert-pretraining-finetuning.html">Lesson 11</a> for how it's actually
+  trained in two stages (pretraining, then fine-tuning).</p>
 
   <h2>2. Encoder + Decoder — transform one sequence into another</h2>
   <p>The encoder reads and compresses the source. The decoder generates the target one step at a time, but each

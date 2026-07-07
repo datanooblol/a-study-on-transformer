@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "a-study-on-transformer"
 version = "0.1.0"
@@ -12,6 +16,9 @@ dependencies = [
   "torch>=2.11.0",
   "umap-learn>=0.5.12",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sequences_to_multiple_outcomes"]
 
 [tool.uv.sources]
 torch = [

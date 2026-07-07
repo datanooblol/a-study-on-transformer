@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 14 — Baselines &amp; Checkpointing in Practice</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill current" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 14 of 14</p>
+  <h1>Baselines &amp; Checkpointing in Practice</h1>
+  <p class="subtitle">Lesson 13 named two things to do: compute a real baseline, and stop keeping the wrong
+  checkpoint. This lesson is the concrete, working code for both — ready to fold into any training loop in this
+  curriculum, including the one already running in the applied projects.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core concept — applies to any training run, any architecture</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Related lessons to read alongside this one</span>
+    <ul>
+      <li><a href="13-reading-training-signals.html">Lesson 13</a> — the diagnosis this lesson turns into working code</li>
+      <li><a href="08-validation-and-deployment.html">Lesson 8</a> — validation splits and metrics, the prerequisite for both techniques below</li>
+    </ul>
+  </div>
+
+  <h2>Part 1 — a real theoretical baseline, not a guess</h2>
+  <p>Lesson 13's callout was specific: compute the naive baseline <strong>from the known generating weights</strong>,
+  not from raw label frequency. Here's why that distinction matters, and how to actually do it.</p>
+
+  <p>Working with real-world data, you never know the true process that generated your labels — the best you can
+  do is estimate a baseline empirically (most-frequent-class accuracy, mean-prediction MAE) from the data you
+  happen to have. Working with a mock dataset you wrote yourself, you have something almost nobody gets: the
+  <em>exact</em> probabilities the generator used. That's not a consolation prize — it's a genuine advantage
+  worth using. It lets you compute the actual <strong>Bayes-optimal</strong> accuracy: the best any model could
+  possibly do, even with infinite data and a perfect fit, because the remaining error is pure randomness baked
+  into the generator itself.</p>
+
+  <h3>Working it out for next-item prediction</h3>
+  <p><code>sample_category(age)</code> assigns each category a weight that depends only on age. Given a specific
+  age, the true probability of each category is that category's weight divided by the sum of all five weights —
+  and the best any predictor can do, using only the age, is to always guess the single most likely category.
+  <code>sample_item_in_category()</code> then picks uniformly among that category's 1-2 items, so the true
+  item-level ceiling multiplies in that extra uncertainty too:</p>
+
+  <div class="code-block">
+    <div class="file-tag">theoretical_baseline.py</div>
+    <pre><code>def theoretical_item_ceiling(age: float) -> float:
+    """Bayes-optimal probability of guessing the exact next item correctly,
+    using the generator's own category weights — the best any model can do."""
+    weights = {
+        "Term":            max(0.1, 1.5 - age / 40),
+        "CriticalIllness": max(0.1, 1.2 - age / 50),
+        "WholeLife":       min(1.5, age / 35),
+        "Endowment":       min(1.3, age / 45),
+        "ILP":             0.7,
+    }
+    total = sum(weights.values())
+    best_cat, best_cat_weight = max(weights.items(), key=lambda kv: kv[1])
+
+    cat_prob            = best_cat_weight / total                    # P(best category | age)
+    item_prob_given_cat = 1 / len(ITEM_IDS_BY_CAT[best_cat])          # uniform pick within that category
+    return cat_prob * item_prob_given_cat
+
+
+# average over the actual ages seen in validation — each val_expanded row is
+# (items, ages, prices, sum_insures, next_item, next_age, next_price, next_sum_insure)
+current_ages = [ages[-1] for (items, ages, prices, sum_insures, *_ ) in val_expanded]
+ceiling = sum(theoretical_item_ceiling(age) for age in current_ages) / len(current_ages)
+
+print(f"theoretical best possible next-item accuracy: {ceiling:.1%}")</code></pre>
+  </div>
+
+  <p>Once this number exists, "the model gets 19-21% accuracy" stops being a vibe and becomes a comparison: close
+  to the ceiling means the model is doing about as well as the data allows; well below it means there's real
+  headroom and something about the model or training setup is leaving performance on the table.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Worth knowing — this exact trick doesn't survive contact with real data</div>
+    <p>This works because you wrote the generator and know its exact weights. With real customer data, nobody
+    hands you the true underlying probability distribution — you'd fall back to the cruder empirical baseline
+    (most-frequent-class accuracy, or a simple logistic regression as a "how hard is this really" sanity check)
+    instead. Treat this exact technique as something specific to working with synthetic data, not a general
+    recipe — the <em>principle</em> (compare against the best achievable, not against zero) is what generalizes,
+    not this specific formula.</p>
+  </div>
+
+  <h2>Part 2 — checkpoint tracking and early stopping</h2>
+  <p>The fix for "epoch 50 was worse than epoch 15" is mechanical: save the model's weights whenever validation
+  improves, and stop training once it's been flat for long enough that continuing is just buying overfitting.</p>
+
+  <div class="code-block">
+    <div class="file-tag">checkpointing.py</div>
+    <pre><code>best_val_loss = float("inf")
+patience = 3                    # consecutive non-improving checks to tolerate
+checks_without_improvement = 0
+best_state_dict = None
+
+for epoch in range(EPOCHS):
+    model.train()
+    # ... training loop exactly as before ...
+
+    if (epoch + 1) % 5 == 0:
+        model.eval()
+        val_loss_total = 0.0
+        # ... compute val_loss_total the same way total_loss is computed in training,
+        #     using loss_weigher on the four validation losses ...
+        model.train()
+
+        current_val_loss = val_loss_total / len(next_item_val_loader)
+
+        if current_val_loss &lt; best_val_loss:
+            best_val_loss = current_val_loss
+            best_state_dict = {k: v.clone() for k, v in model.state_dict().items()}
+            checks_without_improvement = 0
+            print(f"epoch {epoch+1:3d} | new best checkpoint (val loss {best_val_loss:.4f})")
+        else:
+            checks_without_improvement += 1
+            if checks_without_improvement >= patience:
+                print(f"epoch {epoch+1:3d} | no improvement for {patience} checks — stopping early")
+                break
+
+model.load_state_dict(best_state_dict)   # restore the best version seen, not whatever's currently loaded</code></pre>
+  </div>
+
+  <div class="diagram">
+    <svg viewBox="0 0 320 120" width="320" height="120" style="display:block;margin:0 auto;">
+      <rect x="140" y="10" width="160" height="95" fill="var(--warn-bg)" opacity="0.5"/>
+      <line x1="20" y1="10" x2="20" y2="105" stroke="var(--border)" stroke-width="1"/>
+      <line x1="20" y1="105" x2="310" y2="105" stroke="var(--border)" stroke-width="1"/>
+      <polyline points="20,80 80,50 140,35 200,40 260,55 300,70" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+      <line x1="140" y1="10" x2="140" y2="105" stroke="var(--good-border)" stroke-width="1.5" stroke-dasharray="4,3"/>
+      <circle cx="140" cy="35" r="4" fill="var(--good-border)"/>
+      <text x="145" y="22" font-size="8" fill="var(--good-text)">best checkpoint saved here</text>
+      <text x="190" y="115" font-size="8" fill="var(--text-dim)">patience window — no improvement, stop</text>
+      <text x="5" y="15" font-size="8" fill="var(--text-dim)">val</text>
+      <text x="5" y="24" font-size="8" fill="var(--text-dim)">loss</text>
+    </svg>
+    <p class="diagram-caption">Illustrative shape — validation loss dips to a real minimum, then drifts back up as
+    the model overfits. The checkpoint saved at the dip is the one worth keeping; everything in the shaded window
+    afterward is patience running out before training actually stops.</p>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — why <code>.clone()</code> matters</div>
+    <p><code>model.state_dict()</code> returns references to the model's <em>live</em> parameter tensors, not a
+    snapshot. If you save it without copying, <code>best_state_dict</code> keeps pointing at the same tensors
+    the model continues training on — by the time you go to use it, it's silently identical to the current
+    (possibly overfit) weights, not the good checkpoint you thought you saved. <code>.clone()</code> on every
+    tensor is what actually freezes a copy in place.</p>
+  </div>
+
+  <p>One design choice worth naming: with four tasks and four different validation metrics, tracking the
+  combined <code>UncertaintyWeightedLoss</code> value (the same number already being minimized in training) is
+  the natural single number to select checkpoints on — it doesn't require arbitrarily deciding that one task
+  (item accuracy? age MAE?) matters more than the others for the purpose of deciding "is this the best epoch."</p>
+
+  <h2>Bringing both together</h2>
+  <p>The two techniques answer two different questions, and both matter before trusting a result: checkpointing
+  answers "is this actually the best version of this model I trained, or just whatever epoch I happened to stop
+  at" — and the theoretical ceiling answers "given the best version, is there realistically more to gain, or is
+  this close to as good as this task allows." Skipping either one risks the same mistake: judging a model by an
+  arbitrary number (the last epoch, or zero) instead of the two numbers that actually mean something (the best
+  it achieved, and the best it could have achieved).</p>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Bayes-optimal / theoretical ceiling</dt>
+    <dd>The best possible performance any model could achieve on a task, given the irreducible randomness in how
+    the labels were actually generated — computable exactly when you know the true generating probabilities.</dd>
+
+    <dt>Checkpoint</dt>
+    <dd>A saved copy of a model's weights (<code>state_dict</code>) at a specific point in training, kept so you
+    can return to it later instead of only ever having the current (possibly worse) weights.</dd>
+
+    <dt>Patience</dt>
+    <dd>The number of consecutive validation checks allowed to pass with no improvement before early stopping
+    triggers.</dd>
+
+    <dt>Early stopping</dt>
+    <dd>Halting training once patience runs out, instead of running a fixed epoch count regardless of whether
+    validation is still improving.</dd>
+
+    <dt>State dict</dt>
+    <dd>A Python dictionary mapping each parameter's name to its current tensor value — what <code>model.state_dict()</code>
+    returns, and what needs to be <code>.clone()</code>'d to actually freeze a snapshot rather than a live reference.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Compute a real baseline before judging a result — the generator's own known weights, when you have them, beat guessing.</li>
+    <li>Save a checkpoint whenever validation improves; restore it at the end, don't assume the final epoch is the best one.</li>
+    <li>Use patience to stop training once further epochs are clearly just overfitting, not progress.</li>
+    <li><code>.clone()</code> every tensor in a saved <code>state_dict</code> — otherwise the "saved" copy silently tracks the live model instead of freezing a snapshot.</li>
+    <li>With multiple tasks, the combined loss is the natural single number to select checkpoints on.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="13-reading-training-signals.html"><span class="dir">Back</span>Lesson 13 — Reading Training Signals</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

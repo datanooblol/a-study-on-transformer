@@ -271,6 +271,26 @@ code {
 .files-box code { background: transparent; padding: 0; color: var(--accent-dim); }
 .files-box ul { margin: 0; padding-left: 18px; }
 
+/* ---------- glossary ---------- */
+
+.glossary {
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 22px;
+  margin: 20px 0;
+  box-shadow: var(--shadow);
+}
+.glossary dt {
+  font-weight: 700;
+  color: var(--accent-dim);
+  margin-top: 14px;
+  font-family: Consolas, Menlo, monospace;
+  font-size: 0.92rem;
+}
+.glossary dt:first-child { margin-top: 0; }
+.glossary dd { margin: 4px 0 0; color: var(--text); font-size: 0.9rem; }
+
 /* ---------- callouts ---------- */
 
 .callout {
@@ -423,6 +443,7 @@ code {
 .tok.cls { background: var(--accent); color: white; border-color: var(--accent); font-weight: 700; }
 .tok.real { background: var(--accent-soft); border-color: var(--accent-dim); }
 .tok.masked { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn-text); text-decoration: line-through; }
+.tok.hidden { background: var(--encdec-bg); border-color: var(--encdec-color); color: var(--encdec-color); font-weight: 700; border-style: dashed; }
 
 .grid-label { text-align: center; font-size: 0.72rem; color: var(--text-dim); margin-bottom: 4px; }
 

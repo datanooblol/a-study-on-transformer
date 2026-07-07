@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 11 — BERT: Pretraining &amp; Fine-Tuning</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill current" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 11 of 14</p>
+  <h1>BERT: Pretraining &amp; Fine-Tuning</h1>
+  <p class="subtitle">The real model behind Lesson 3's CLS trick and Lesson 2's "encoder-only" example — and the
+  training paradigm that made it famous: learn general-purpose language understanding from raw, unlabeled text
+  first, then specialize for one specific task second.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge enc"><span class="dot"></span>Encoder-only</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Related lessons to read alongside this one</span>
+    <ul>
+      <li><a href="02-three-architectures.html">Lesson 2 — Three Architectures</a> — BERT is exactly the "Encoder-only" architecture described there</li>
+      <li><a href="03-cls-and-padding.html">Lesson 3 — CLS &amp; Padding</a> — the CLS-pooling mechanism itself, covered in depth; this lesson won't repeat it</li>
+      <li><a href="05-self-supervised-contrastive.html">Lesson 5 — Contrastive Pretraining</a> — this repo's own self-supervised pretraining recipe, the closest real analogue to BERT's Stage 1</li>
+    </ul>
+    <p style="margin: 8px 0 0; font-size: 0.82rem;">BERT itself isn't implemented anywhere in this repo — this lesson is real-world grounding for the architecture and training ideas the other lessons build from scratch.</p>
+  </div>
+
+  <h2>What BERT actually is</h2>
+  <p><strong>BERT</strong> — <strong>B</strong>idirectional <strong>E</strong>ncoder <strong>R</strong>epresentations
+  from <strong>T</strong>ransformers — is, structurally, nothing new by the time you've read this curriculum: it's
+  Lesson 2's encoder-only architecture (bidirectional self-attention, no causal mask), with Lesson 3's CLS token
+  prepended for pooling. What made it a landmark model in 2018 wasn't a new block — it was a training recipe:
+  <strong>pretrain once on unlabeled data, then fine-tune cheaply for any specific task.</strong></p>
+
+  <h2>The big picture — two stages, two very different jobs</h2>
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box"><span class="t">Raw unlabeled text</span><span class="s">Books + Wikipedia, billions of words</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box accent"><span class="t">Stage 1: Pretraining</span><span class="s">MLM + NSP, self-supervised</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">General-purpose BERT weights</span></div>
+    </div>
+    <div style="text-align:center; margin: 10px 0; color: var(--text-dim); font-size: 0.85rem;">+ a small task-specific head, + a labeled dataset for one task</div>
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">Stage 2: Fine-tuning</span><span class="s">supervised, one specific task</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">Specialized model</span><span class="s">e.g. a sentiment classifier</span></div>
+    </div>
+    <p class="diagram-caption">Same weights carry over from Stage 1 into Stage 2 — fine-tuning doesn't start from
+    scratch, it specializes what pretraining already learned.</p>
+  </div>
+
+  <table class="cmp">
+    <tr><th></th><th>Stage 1 — Pretraining</th><th>Stage 2 — Fine-tuning</th></tr>
+    <tr><td>Data</td><td>raw, unlabeled text</td><td>labeled examples for one task</td></tr>
+    <tr><td>Data size</td><td>billions of words</td><td>thousands to low millions of examples</td></tr>
+    <tr><td>Objective</td><td>self-supervised (MLM + NSP)</td><td>whatever the task actually needs (classification, span prediction, ...)</td></tr>
+    <tr><td>Duration</td><td>days to weeks, many GPUs/TPUs</td><td>hours, just a few epochs</td></tr>
+    <tr><td>How often</td><td>once — the same pretrained weights get reused</td><td>once per downstream task, starting from the same pretrained weights each time</td></tr>
+  </table>
+
+  <h2>Stage 1, part one — Masked Language Modeling (MLM)</h2>
+  <p><strong>Masked Language Modeling</strong> is a made-up task that needs zero human labeling: randomly hide
+  about 15% of the input tokens behind a special <strong><code>[MASK]</code> token</strong>, and train the model
+  to predict what word was actually there — using the bidirectional context on <em>both</em> sides of the gap.</p>
+
+  <div class="diagram">
+    <div class="token-row">
+      <div class="tok cls">CLS</div>
+      <div class="tok real">The</div>
+      <div class="tok hidden">MASK</div>
+      <div class="tok real">sat</div>
+      <div class="tok real">on</div>
+      <div class="tok real">the</div>
+      <div class="tok real">mat</div>
+      <div class="tok cls">SEP</div>
+    </div>
+    <p class="diagram-caption">predict: <strong>"cat"</strong> — using both the left context ("The") and the
+    right context ("sat on the mat") at once, which only a bidirectional encoder can do. A decoder (Lesson 2's
+    causal architecture) could only ever see "The" and would have to guess blind.</p>
+  </div>
+
+  <p>The "label" for this task is just the word that was already sitting there before it got hidden — no human
+  ever annotated anything. To predict it correctly, the model is forced to learn real grammar, semantics, and
+  context, purely as a side effect of getting good at filling in blanks.</p>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — the 80/10/10 rule</div>
+    <p>Of the 15% of tokens chosen to be hidden, only 80% actually get replaced with the literal
+    <code>[MASK]</code> token; 10% get replaced with a random other word, and 10% are left completely unchanged
+    (but still graded as if hidden). Why bother: <code>[MASK]</code> never appears during fine-tuning or real use
+    — only during this pretraining task. If every hidden position were always the literal <code>[MASK]</code>
+    token, the model could get lazy and only build careful representations for positions that look like
+    <code>[MASK]</code>. Mixing in random and unchanged tokens forces it to build good contextual representations
+    for <em>every</em> position, since it can never be sure which ones are secretly being graded.</p>
+  </div>
+
+  <h2>Stage 1, part two — Next Sentence Prediction (NSP)</h2>
+  <p><strong>Next Sentence Prediction</strong> is BERT's second pretraining task: feed it two sentences, A and B.
+  Half the time, B genuinely is the sentence that followed A in the original text (label <code>IsNext</code>);
+  half the time, B is a random sentence pulled from somewhere else entirely (label <code>NotNext</code>). The
+  model reads this off the <a href="03-cls-and-padding.html">CLS token's</a> final output, through a small binary
+  classifier.</p>
+
+  <table class="cmp">
+    <tr><th>Sentence A</th><th>Sentence B</th><th>Label</th></tr>
+    <tr><td>"The cat sat on the mat."</td><td>"It was very comfortable."</td><td><code>IsNext</code></td></tr>
+    <tr><td>"The cat sat on the mat."</td><td>"Paris is the capital of France."</td><td><code>NotNext</code></td></tr>
+  </table>
+
+  <div class="diagram">
+    <div class="stack">
+      <div class="stack-box">[CLS] Sentence A [SEP] Sentence B [SEP]</div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">Bidirectional encoder <span class="sub">attends across both sentences at once</span></div>
+      <div class="stack-arrow">↓ read CLS's output</div>
+      <div class="stack-box accent">Linear classifier</div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">IsNext / NotNext</div>
+    </div>
+  </div>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Worth knowing — later research revised this</div>
+    <p>NSP was part of the original 2018 BERT paper, but follow-up work (notably RoBERTa, 2019) found it
+    contributed little and dropped it entirely, getting equal or better results training on MLM alone with more
+    data and longer training instead. Good example of how even a well-known, influential design choice can turn
+    out to matter less than assumed once someone actually runs the ablation.</p>
+  </div>
+
+  <h2>The CLS token, defined</h2>
+  <p>A quick, explicit definition since it's used constantly above: <strong>CLS</strong> ("classification token")
+  is a special token prepended to the front of every input sequence. It doesn't correspond to any real word — its
+  entire purpose is to attend to every other token in the sequence and accumulate a summary of the whole thing,
+  which is then read off as one fixed-size vector for whatever classification or regression task sits on top.
+  <a href="03-cls-and-padding.html">Lesson 3</a> already covers exactly how this mechanism works end-to-end
+  (building the pad mask, prepending CLS, reading its output) — this lesson is just naming where that trick
+  actually came from.</p>
+
+  <h2>Stage 2 — fine-tuning for a downstream task</h2>
+  <p>A <strong>downstream task</strong> is simply the actual thing you want to solve — sentiment analysis,
+  question answering, whatever comes "downstream" of pretraining in the pipeline. <strong>Fine-tuning</strong>
+  means: take the pretrained weights exactly as they are, attach one small task-specific head, and keep training
+  — now supervised, now on a labeled dataset for that one task.</p>
+
+  <table class="cmp">
+    <tr><th>Downstream task</th><th>How the pretrained model gets used</th></tr>
+    <tr><td>Sentiment classification</td><td>CLS's output → small linear layer → positive/negative</td></tr>
+    <tr><td>Named entity recognition</td><td><em>every</em> token's output (not just CLS) → linear layer → entity tag per token</td></tr>
+    <tr><td>Question answering</td><td>every token's output → predict which token starts and which ends the answer span</td></tr>
+    <tr><td>Sentence-pair similarity</td><td>CLS's output, computed over both sentences at once → a similarity score</td></tr>
+  </table>
+
+  <p>Notice fine-tuning usually keeps training <em>all</em> of BERT's weights, not just the new head — the whole
+  network keeps adjusting, just starting from a far better place than random initialization, and needing far less
+  labeled data and far fewer steps to get there.</p>
+
+  <h2>Why split training into two stages at all?</h2>
+  <p>Labeled data is expensive and scarce — someone has to sit down and annotate it. Raw text is nearly free and
+  effectively unlimited. Pretraining is what lets you extract everything learnable out of the cheap, abundant
+  resource, so that fine-tuning only has to spend the expensive, scarce resource on <em>specializing</em> rather
+  than learning language from zero. Skip pretraining, and every downstream task would need enough labeled data to
+  teach a model general language understanding <em>and</em> the specific task — which most real tasks simply
+  don't have enough labeled examples for.</p>
+
+  <div class="callout good">
+    <div class="callout-title">✓ Where this shows up elsewhere in this curriculum</div>
+    <p><a href="05-self-supervised-contrastive.html">Lesson 5</a>'s contrastive pretraining is this repo's own
+    version of Stage 1 — no next-item or multi-task labels needed, just a pretext task manufactured from the
+    structure of the sequences themselves (two crops of the same sequence should look similar). The same
+    two-stage question applies there too: it's worth it when labeled data is the bottleneck relative to how much
+    raw sequence data you have — and not worth the extra complexity when it isn't.</p>
+  </div>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>BERT</dt>
+    <dd>Bidirectional Encoder Representations from Transformers — an encoder-only Transformer (Lesson 2) that
+    popularized pretrain-then-fine-tune for NLP.</dd>
+
+    <dt>Pretraining</dt>
+    <dd>Training on a task that needs no human-labeled data, usually on a huge corpus, to learn general-purpose
+    representations before ever touching the task you actually care about.</dd>
+
+    <dt>Fine-tuning</dt>
+    <dd>Continuing to train an already-pretrained model on a smaller, labeled dataset for one specific downstream
+    task.</dd>
+
+    <dt>Downstream task</dt>
+    <dd>The actual task you ultimately want solved (sentiment analysis, question answering, ...) — "downstream"
+    because it comes after pretraining in the pipeline.</dd>
+
+    <dt>Self-supervised</dt>
+    <dd>A training signal manufactured from the structure of the data itself (e.g. "predict the word I just
+    hid"), rather than from external human labels.</dd>
+
+    <dt>MLM (Masked Language Modeling)</dt>
+    <dd>BERT's main pretraining task — hide random tokens, predict the originals using bidirectional context.</dd>
+
+    <dt>[MASK] token</dt>
+    <dd>A special placeholder token used only during MLM pretraining to mark a hidden position; never appears
+    during fine-tuning or real use.</dd>
+
+    <dt>NSP (Next Sentence Prediction)</dt>
+    <dd>BERT's second pretraining task — given two sentences, predict whether the second genuinely follows the
+    first in the original text. Later found to add little value (see callout above).</dd>
+
+    <dt>[SEP] token</dt>
+    <dd>A separator token marking the boundary between two segments packed into one input (e.g. sentence A and
+    sentence B in NSP).</dd>
+
+    <dt>CLS token</dt>
+    <dd>"Classification token" — prepended to every input, represents no real word, exists purely to aggregate
+    sequence-level information via attention. See <a href="03-cls-and-padding.html">Lesson 3</a> for the full
+    mechanism.</dd>
+
+    <dt>WordPiece (subword tokenization)</dt>
+    <dd>BERT doesn't tokenize whole words — rarer words get split into smaller subword pieces from a fixed
+    vocabulary, so the vocabulary stays a manageable size while still covering essentially any word.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>BERT = Lesson 2's encoder-only architecture + Lesson 3's CLS pooling — no new block, a new training recipe.</li>
+    <li>Pretraining (MLM + NSP) needs zero labels, runs on massive raw text, and teaches general-purpose representations.</li>
+    <li>Fine-tuning starts from those pretrained weights and specializes on a small labeled dataset for one task.</li>
+    <li>The split exists because labeled data is scarce/expensive and raw text is abundant/cheap — pretraining spends the cheap resource, fine-tuning spends the expensive one sparingly.</li>
+    <li>Whether this two-stage approach is worth it for a project of your own comes down to one question: is labeled data actually your bottleneck?</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="10-multi-task-encoder.html"><span class="dir">Back</span>Lesson 10 — Multi-Task Encoder</a>
+    <a class="next" href="12-asymmetric-losses-and-constraints.html"><span class="dir">Next</span>Lesson 12 — Asymmetric Losses →</a>
+  </div>
+</main>
+</body>
+</html>

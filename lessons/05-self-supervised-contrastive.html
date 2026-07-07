@@ -23,12 +23,16 @@
       <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
       <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 5 of 10</p>
+  <p class="eyebrow">Lesson 5 of 14</p>
   <h1>Self-Supervised Contrastive Pretraining</h1>
   <p class="subtitle">No labels at all — just raw interaction sequences. This lesson learns useful embeddings by
   teaching the model that two random crops of the <em>same</em> sequence should look similar, and every other
@@ -52,6 +56,11 @@
   <p>Crop two random contiguous sub-sequences from the same source sequence — a <strong>positive pair</strong>.
   Every other sample in the batch (and its crop) becomes a <strong>negative</strong>. The loss pulls positive
   pairs' embeddings together and pushes negatives apart. No human-labeled target required.</p>
+  <p style="font-size:0.85rem; color:var(--text-dim);">This is this repo's own version of a self-supervised
+  pretraining task — the same category of idea as BERT's Masked Language Modeling (predict something about the
+  data using only the data itself, no labels), just a different pretext task. See
+  <a href="11-bert-pretraining-finetuning.html">Lesson 11</a> for BERT's version and the two-stage
+  pretrain-then-fine-tune story this fits into.</p>
 
   <div class="code-block">
     <div class="file-tag">package/collate.py — crop_pair</div>

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 12 — Asymmetric Losses &amp; Hard Constraints</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill current" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 12 of 14</p>
+  <h1>Asymmetric Losses &amp; Hard Constraints</h1>
+  <p class="subtitle">Not every wrong answer costs the same, and not every constraint should be left to the loss
+  function to enforce. A ground-up look at two complementary tools — reshaping the loss, and reshaping what the
+  model is even allowed to output — using next-purchase age prediction as the running example.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core concept — applies to any regression head, any architecture</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Related lessons to read alongside this one</span>
+    <ul>
+      <li><a href="06-applied-decoder-insurance.html">Lesson 6</a> &amp; <a href="10-multi-task-encoder.html">Lesson 10</a> — where <code>MSELoss</code> is used as the default for every regression head so far</li>
+      <li><a href="08-validation-and-deployment.html">Lesson 8</a> — validation metrics, which should reflect the same asymmetry as the loss if one exists</li>
+    </ul>
+    <p style="margin: 8px 0 0; font-size: 0.82rem;">This lesson isn't tied to a specific file in this repo — none
+    of the applied projects currently need this, but the reasoning generalizes to any regression head you build
+    on top of them later.</p>
+  </div>
+
+  <h2>The problem: MSE doesn't know which direction is worse</h2>
+  <p>Every regression head in this curriculum so far uses <code>MSELoss</code> or plain squared error — and MSE
+  is <strong>symmetric</strong>: it penalizes predicting 5 units too high exactly the same as predicting 5 units
+  too low. That's the right assumption most of the time. But not always.</p>
+
+  <p>Concrete case: predicting a customer's age at their <em>next</em> purchase. Age only moves in one direction
+  — a customer's next purchase can never happen at a younger age than their current one. Predicting an age
+  that's too <em>high</em> is a normal-sized mistake. Predicting an age that's too <em>low</em>, past what's
+  physically possible, is a much bigger problem — not just "more wrong," but wrong in a way reality itself rules
+  out. A symmetric loss has no way to express that difference.</p>
+
+  <div class="diagram">
+    <div class="grid-label">symmetric loss (MSE) — same penalty either direction</div>
+    <svg viewBox="0 0 200 110" width="200" height="110" style="display:block;margin:0 auto;">
+      <line x1="10" y1="95" x2="190" y2="95" stroke="var(--border)" stroke-width="1"/>
+      <line x1="100" y1="10" x2="100" y2="100" stroke="var(--border)" stroke-width="1"/>
+      <path d="M 25 20 L 100 95 L 175 20" stroke="var(--accent)" stroke-width="2.5" fill="none"/>
+      <text x="94" y="108" font-size="9" fill="var(--text-dim)">0</text>
+      <text x="8" y="18" font-size="9" fill="var(--text-dim)">loss</text>
+      <text x="178" y="105" font-size="9" fill="var(--text-dim)">error</text>
+    </svg>
+    <p class="diagram-caption">Equal slope on both sides of zero — over-predicting and under-predicting by the
+    same amount always cost the same.</p>
+  </div>
+
+  <h2>Two different problems hiding inside one statement</h2>
+  <p>"Age must be equal or more" is actually two separate claims bundled together, and they need two separate
+  tools:</p>
+  <ol>
+    <li><strong>A cost asymmetry</strong> — being wrong in one direction is <em>more expensive</em> than the
+    other, but both directions remain <em>possible</em>. Fixed by reshaping the <strong>loss function</strong>.</li>
+    <li><strong>A hard constraint</strong> — one direction is not just costly, it's <em>impossible</em>. Fixed by
+    reshaping what the <strong>model is allowed to output</strong> in the first place.</li>
+  </ol>
+  <p>Ground up: solve the cost-asymmetry problem first (it's the more general one), then the hard-constraint
+  problem, then see how they combine.</p>
+
+  <h2>Tool 1 — Quantile (pinball) loss</h2>
+  <p>MSE and MAE both optimize toward predicting the <em>mean</em> of a distribution. <strong>Quantile
+  regression</strong> asks a different question: instead of "what's the average next age," it asks "give me a
+  number I'm rarely <em>below</em>" (a high quantile) or "rarely <em>above</em>" (a low quantile). The tool that
+  makes this work is the <strong>pinball loss</strong> (also called quantile loss):</p>
+
+  <div class="code-block">
+    <div class="file-tag">pinball_loss.py</div>
+    <pre><code>import torch
+
+def pinball_loss(pred: torch.Tensor, target: torch.Tensor, q: float = 0.9) -> torch.Tensor:
+    """q closer to 1 -> punishes under-prediction harder. q=0.5 -> plain MAE."""
+    e = target - pred
+    return torch.mean(torch.max(q * e, (q - 1) * e))</code></pre>
+  </div>
+
+  <p>Walk through both cases by hand:</p>
+  <table class="cmp">
+    <tr><th>Case</th><th><code>e = target - pred</code></th><th>Which term wins the <code>max</code></th><th>Effective slope</th></tr>
+    <tr><td>Under-prediction (true value is higher than predicted)</td><td>positive</td><td><code>q · e</code></td><td><code>q</code></td></tr>
+    <tr><td>Over-prediction (true value is lower than predicted)</td><td>negative</td><td><code>(q − 1) · e</code></td><td><code>1 − q</code></td></tr>
+  </table>
+
+  <div class="diagram">
+    <div class="grid-label">asymmetric loss (pinball, q = 0.9) — steep on one side, shallow on the other</div>
+    <svg viewBox="0 0 200 110" width="200" height="110" style="display:block;margin:0 auto;">
+      <line x1="10" y1="95" x2="190" y2="95" stroke="var(--border)" stroke-width="1"/>
+      <line x1="100" y1="10" x2="100" y2="100" stroke="var(--border)" stroke-width="1"/>
+      <path d="M 25 82 L 100 95 L 175 15" stroke="var(--accent)" stroke-width="2.5" fill="none"/>
+      <text x="94" y="108" font-size="9" fill="var(--text-dim)">0</text>
+      <text x="8" y="18" font-size="9" fill="var(--text-dim)">loss</text>
+      <text x="30" y="78" font-size="8" fill="var(--text-dim)">over-predict</text>
+      <text x="140" y="30" font-size="8" fill="var(--text-dim)">under-predict</text>
+    </svg>
+    <p class="diagram-caption">Right side (under-prediction, <code>e &gt; 0</code>) is steep — slope <code>q = 0.9</code>.
+    Left side (over-prediction) is shallow — slope <code>1 − q = 0.1</code>. Under-predicting the same amount now
+    costs 9× more.</p>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip</div>
+    <p><code>q</code> is a dial, not a fixed rule: <code>q = 0.5</code> recovers plain symmetric MAE (equal
+    slopes both sides). Push <code>q</code> toward <code>1</code> to make under-prediction increasingly
+    expensive; push it toward <code>0</code> for the opposite. There's a second classic option worth knowing by
+    name — <strong>Linex loss</strong> (<code>exp(a·e) − a·e − 1</code>) — which uses an exponential penalty on
+    one side instead of a steeper line. Pinball loss is simpler to reason about and tune, so it's the better
+    starting point.</p>
+  </div>
+
+  <h2>Tool 2 — when "expensive" isn't enough: reparametrize the output</h2>
+  <p>Here's the limit of Tool 1: even at <code>q = 0.99</code>, under-prediction is <em>expensive</em>, not
+  <em>impossible</em>. A confused, undertrained network can still output an age below the true minimum — it just
+  pays a large penalty when it does. For a constraint that's <strong>always</strong> true, not just usually
+  costly to violate, reshaping the loss only discourages the mistake. What actually <em>prevents</em> it is
+  changing what the model is mathematically allowed to produce.</p>
+
+  <p>Instead of predicting the next age directly, predict a <strong>non-negative increment</strong> from the age
+  you already know, and add it back:</p>
+
+  <div class="code-block">
+    <div class="file-tag">constrained_output.py</div>
+    <pre><code>import torch.nn.functional as F
+
+def predict_next_age(raw_output: torch.Tensor, current_age: torch.Tensor) -> torch.Tensor:
+    """next_age_pred >= current_age is guaranteed by construction, not by training."""
+    delta_age = F.softplus(raw_output)   # squashes any real number to a value >= 0
+    return current_age + delta_age</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label"><code>softplus(x) = log(1 + exp(x))</code> — any real number in, always non-negative out</div>
+    <svg viewBox="0 0 200 100" width="200" height="100" style="display:block;margin:0 auto;">
+      <line x1="10" y1="85" x2="190" y2="85" stroke="var(--border)" stroke-width="1"/>
+      <line x1="100" y1="10" x2="100" y2="90" stroke="var(--border)" stroke-width="1"/>
+      <path d="M 20 83 C 60 83, 90 83, 100 78 C 115 68, 140 40, 180 12" stroke="var(--accent)" stroke-width="2.5" fill="none"/>
+      <text x="94" y="98" font-size="9" fill="var(--text-dim)">0</text>
+      <text x="8" y="18" font-size="9" fill="var(--text-dim)">delta</text>
+      <text x="178" y="95" font-size="9" fill="var(--text-dim)">raw output</text>
+    </svg>
+    <p class="diagram-caption">Even for a very negative raw output, the curve flattens toward (but never
+    crosses) zero — it approaches the floor smoothly instead of hitting a wall.</p>
+  </div>
+
+  <table class="cmp">
+    <tr><th>Function</th><th>Always ≥ 0?</th><th>Gradient behavior</th><th>Notes</th></tr>
+    <tr><td><code>relu(x)</code></td><td>yes</td><td>exactly zero for all negative inputs</td><td>simplest option, but a "dead" input never recovers a gradient to learn from</td></tr>
+    <tr><td><code>softplus(x)</code></td><td>yes</td><td>smooth, always non-zero</td><td>generally preferred — never fully stops learning, even for very negative inputs</td></tr>
+    <tr><td><code>exp(x)</code></td><td>yes</td><td>smooth, but grows extremely fast</td><td>can cause numerical blow-ups for large positive inputs; use with caution</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Worth knowing — this is a general principle, not just an age trick</div>
+    <p>Whenever you know a hard fact about your output space ahead of time — a value must be non-negative, must
+    stay inside <code>[0, 1]</code> (use <code>sigmoid</code>), must be one of a fixed set of categories, must
+    sum to 1 across several outputs (use <code>softmax</code>) — it is almost always better to bake that fact
+    into how you <em>parametrize</em> the output than to hope a loss function teaches the network to respect it
+    on its own. A loss can only ever make violations expensive; a parametrization can make them mathematically
+    unreachable.</p>
+  </div>
+
+  <h2>Combining both</h2>
+  <p>The two tools solve different problems and stack cleanly: reparametrize the output to make the impossible
+  case unreachable, then optionally still shape the loss for whatever cost asymmetry remains among the
+  physically valid outcomes.</p>
+
+  <div class="code-block">
+    <div class="file-tag">combined.py</div>
+    <pre><code>next_age_pred = predict_next_age(raw_head_output, current_age)   # Tool 2 — floor is guaranteed
+
+loss_age = pinball_loss(next_age_pred, true_next_age, q=0.7)      # Tool 1 — mild remaining asymmetry
+</code></pre>
+  </div>
+  <p>Notice <code>q</code> dropped from the earlier <code>0.9</code> to <code>0.7</code> here — with the hard
+  floor already architecturally guaranteed, the loss no longer has to do the heavy lifting of preventing
+  impossible predictions. It only needs to express whatever <em>milder</em> cost preference remains, if any. The
+  two tools aren't fighting for the same job; each is doing the part the other can't.</p>
+
+  <div class="diagram">
+    <div class="stack">
+      <div class="stack-box accent">Is the wrong-direction outcome impossible, or just more costly?</div>
+      <div class="stack-arrow">↓</div>
+    </div>
+    <div class="flow" style="margin: 10px 0 4px;">
+      <div class="flow-box"><span class="t">Impossible</span><span class="s">hard constraint</span></div>
+      <div class="flow-box"><span class="t">More costly</span><span class="s">soft preference</span></div>
+    </div>
+    <div class="flow" style="margin: 4px 0 0;">
+      <div class="flow-box accent"><span class="t">Reparametrize the output</span><span class="s">softplus / sigmoid / softmax</span></div>
+      <div class="flow-box accent"><span class="t">Reshape the loss</span><span class="s">pinball / quantile / Linex</span></div>
+    </div>
+    <p class="diagram-caption">Often both apply at once, as in the age example — check for a hard floor/ceiling
+    first, then decide whether a cost asymmetry remains on top of it.</p>
+  </div>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Symmetric loss</dt>
+    <dd>A loss (MSE, MAE) that penalizes over- and under-prediction of the same magnitude equally.</dd>
+
+    <dt>Asymmetric loss</dt>
+    <dd>A loss that penalizes one direction of error more than the other, on purpose, because the real-world
+    cost of the two directions genuinely differs.</dd>
+
+    <dt>Quantile</dt>
+    <dd>A percentile of a distribution — "the value below which X% of outcomes fall." Predicting the 90th
+    quantile means predicting a number you expect to be below only 10% of the time.</dd>
+
+    <dt>Pinball loss (quantile loss)</dt>
+    <dd>The loss function that trains a model to predict a specific quantile instead of the mean, by giving
+    under- and over-prediction different slopes controlled by a parameter <code>q</code>.</dd>
+
+    <dt>Softplus</dt>
+    <dd>A smooth function, <code>log(1 + exp(x))</code>, that maps any real number to a non-negative one — used
+    to guarantee an output can never go below zero, without a hard cutoff.</dd>
+
+    <dt>Reparametrization (of an output)</dt>
+    <dd>Changing what a model directly predicts (e.g. a bounded increment instead of an absolute value) so that
+    a known constraint is satisfied automatically, rather than merely encouraged by the loss.</dd>
+
+    <dt>Hard constraint vs. cost asymmetry</dt>
+    <dd>A hard constraint means one outcome is truly impossible; a cost asymmetry means both outcomes are
+    possible but one is more expensive. The first calls for reparametrizing the output; the second calls for
+    reshaping the loss.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Symmetric losses (MSE/MAE) assume both directions of error cost the same — true often, not always.</li>
+    <li>Pinball loss lets you dial in exactly how much more one direction should cost via a single parameter <code>q</code>.</li>
+    <li>If a direction is truly <em>impossible</em>, not just costly, reparametrize the output (<code>softplus</code>, <code>sigmoid</code>, <code>softmax</code>) so the model can't produce it at all.</li>
+    <li>The two tools compose — guarantee the hard floor architecturally, then shape the loss for whatever softer preference remains.</li>
+    <li>This generalizes past age: any output with a known floor, ceiling, or direction-dependent cost is a candidate for the same two questions.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="11-bert-pretraining-finetuning.html"><span class="dir">Back</span>Lesson 11 — BERT</a>
+    <a class="next" href="13-reading-training-signals.html"><span class="dir">Next</span>Lesson 13 — Reading Training Signals →</a>
+  </div>
+</main>
+</body>
+</html>

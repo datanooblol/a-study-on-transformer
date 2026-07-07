@@ -23,12 +23,16 @@
       <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
       <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 3 of 10</p>
+  <p class="eyebrow">Lesson 3 of 14</p>
   <h1>CLS Token &amp; Padding Mask</h1>
   <p class="subtitle">The encoder outputs one vector per input token. But a regression/classification head needs
   exactly one vector per <em>sequence</em>. This lesson is about the trick that bridges that gap, and the mask
@@ -156,7 +160,9 @@ return out[:, 0]                  # (batch, d_model) — CLS position only</code
   <div class="code-block"><pre><code>return out[:, 1:].mean(dim=1)   # average over real positions only</code></pre></div>
   <p>CLS is generally preferred because averaging treats every token equally by construction, while CLS <em>learns</em>
   what to weight — it can learn "the most recent purchase matters more" if that's what the loss rewards. It's
-  also the same trick BERT uses for sentence embeddings, so it's well-trodden ground.</p>
+  also the same trick BERT uses for sentence embeddings, so it's well-trodden ground — see
+  <a href="11-bert-pretraining-finetuning.html">Lesson 11</a> for how BERT actually trains this CLS vector to be
+  useful in the first place, before any downstream task ever sees it.</p>
 
   <div class="callout tip">
     <div class="callout-title">💡 Tip</div>

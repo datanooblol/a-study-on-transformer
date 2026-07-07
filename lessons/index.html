@@ -23,6 +23,10 @@
       <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
       <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
       <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
     </nav>
   </div>
 </header>
@@ -31,9 +35,10 @@
   <p class="eyebrow">Study Curriculum</p>
   <h1>A Study on Transformer</h1>
   <p class="subtitle">Understanding transformer architecture inside out — not as a language model, but as a general
-  sequence-processing pattern applied to insurance customer data. Ten lessons, each grounded in the actual code
-  in this repo, covering two examples of the pattern applied outside insurance/NLP entirely and a multi-task
-  extension of the encoder project.</p>
+  sequence-processing pattern applied to insurance customer data. Fourteen lessons, most grounded in the actual
+  code in this repo, covering two examples of the pattern applied outside insurance/NLP entirely, a multi-task
+  extension of the encoder project, the real-world model (BERT) behind the CLS trick studied along the way, loss
+  functions beyond plain MSE, and how to read — and act on — whether any of it actually worked.</p>
 
   <h2>How to use this</h2>
   <p>Read the lessons in order the first time — each one builds on the last. After that, use the pill nav above
@@ -91,6 +96,16 @@
       <div class="stack-arrow">↓</div>
       <div class="stack-box">Lesson 9 — Beyond NLP<span class="sub">time-series, tabular fusion, vision — same blocks, new tokens</span></div>
     </div>
+    <div style="text-align:center; margin: 6px 0; color: var(--text-dim); font-size: 0.85rem;">↓ the real-world model behind Lessons 2 &amp; 3's CLS trick ↓</div>
+    <div class="stack">
+      <div class="stack-box">Lesson 11 — BERT<span class="sub">pretraining (MLM + NSP) then fine-tuning — the two-stage recipe, explained</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 12 — Asymmetric Losses<span class="sub">beyond MSE — pinball loss, and reparametrizing outputs for hard constraints</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 13 — Reading Training Signals<span class="sub">overfitting, naive baselines, and ceilings — from a real training run</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 14 — Baselines &amp; Checkpointing<span class="sub">the concrete code: a real Bayes-optimal baseline, checkpoint tracking, early stopping</span></div>
+    </div>
   </div>
 
   <h2>Lessons</h2>
@@ -116,6 +131,10 @@
     <tr><td>8</td><td><a href="08-validation-and-deployment.html">Validate &amp; Deploy</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>How do you know the model actually works, and what does shipping it look like?</td></tr>
     <tr><td>9</td><td><a href="09-beyond-nlp.html">Beyond NLP</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Mixed</span></td><td>What else is "just a sequence of tokens" — time-series, tabular rows, image patches?</td></tr>
     <tr><td>10</td><td><a href="10-multi-task-encoder.html">Multi-Task Encoder</a></td><td><span class="arch-badge enc inline"><span class="dot"></span>Encoder-only</span></td><td>What changes when one shared representation has to predict four related things instead of one?</td></tr>
+    <tr><td>11</td><td><a href="11-bert-pretraining-finetuning.html">BERT</a></td><td><span class="arch-badge enc inline"><span class="dot"></span>Encoder-only</span></td><td>What does BERT actually do differently — and what do "pretraining" and "fine-tuning" precisely mean?</td></tr>
+    <tr><td>12</td><td><a href="12-asymmetric-losses-and-constraints.html">Asymmetric Losses</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>What if predicting too high and too low aren't equally bad — or one of them is outright impossible?</td></tr>
+    <tr><td>13</td><td><a href="13-reading-training-signals.html">Reading Training Signals</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>The loss is falling — but is the model actually learning anything, or just memorizing?</td></tr>
+    <tr><td>14</td><td><a href="14-baselines-and-checkpointing.html">Baselines &amp; Checkpointing</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>How do you actually compute "the best possible score," and actually keep the best model you trained?</td></tr>
   </table>
 
   <h2>Repo map</h2>
@@ -129,6 +148,10 @@
       <li><code>train_insurance_representation_for_claim.py</code>, <code>CLS_and_PAD.md</code> — lessons 3, 7</li>
       <li><code>train_insurance_representation_for_multi_tasks.py</code> — lesson 10</li>
       <li><code>dev.ipynb</code>, <code>transformer_encode_block.ipynb</code> — scratch notebooks referenced in lessons 1, 5, 8</li>
+      <li>lesson 11 (BERT) has no source file in this repo — it's real-world grounding for lessons 2 and 3, not a walkthrough of local code</li>
+      <li>lesson 12 (Asymmetric Losses) also has no source file — none of the applied projects need it yet, but it generalizes to any regression head in lessons 6, 7, or 10</li>
+      <li>lesson 13 (Reading Training Signals) also has no source file — it's a diagnostic skill grounded in a real training run, applicable to every project in this repo</li>
+      <li>lesson 14 (Baselines &amp; Checkpointing) also has no source file — its baseline code references <code>sample_category()</code>/<code>ITEM_IDS_BY_CAT</code> from the same mock-data pattern used in lessons 6, 7, and 10</li>
     </ul>
   </div>
 

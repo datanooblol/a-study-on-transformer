@@ -27,12 +27,14 @@
       <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
       <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
       <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 11 of 14</p>
+  <p class="eyebrow">Lesson 11 of 16</p>
   <h1>BERT: Pretraining &amp; Fine-Tuning</h1>
   <p class="subtitle">The real model behind Lesson 3's CLS trick and Lesson 2's "encoder-only" example — and the
   training paradigm that made it famous: learn general-purpose language understanding from raw, unlabeled text
@@ -111,6 +113,12 @@
   <p>The "label" for this task is just the word that was already sitting there before it got hidden — no human
   ever annotated anything. To predict it correctly, the model is forced to learn real grammar, semantics, and
   context, purely as a side effect of getting good at filling in blanks.</p>
+
+  <p style="font-size:0.85rem; color:var(--text-dim);">This is a genuinely different way of solving the same
+  problem Lesson 6's decoder solves with a causal mask, and Lesson 7's encoder solves by storing a separate
+  label — <a href="15-explicit-vs-derived-targets.html">Lesson 15</a> puts all three side by side and explains
+  exactly why hiding the input, rather than avoiding the setup entirely, is enough to keep bidirectional
+  attention honest here.</p>
 
   <div class="callout tip">
     <div class="callout-title">💡 Tip — the 80/10/10 rule</div>

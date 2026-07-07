@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 16 — Proving Shift-by-One</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill current" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 16 of 16</p>
+  <h1>Proving Shift-by-One: One Pass, Not an Approximation</h1>
+  <p class="subtitle">Lesson 6 introduced shift-by-one. Lesson 15 explained why causality makes it valid. This
+  lesson proves it, with a script you can run yourself: one forward pass over a full sequence gives the exact
+  same per-position results as running every truncated prefix separately — not an approximation, the same
+  floating-point numbers — for a fraction of the compute.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge dec"><span class="dot"></span>Decoder-only (GPT-style) — this guarantee is specific to the causal case</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files &amp; lessons to have open alongside this one</span>
+    <ul>
+      <li><code>package/gpt_decoder_block.py</code> — <code>GPTDecoderBlock</code>, the class this lesson's proof runs directly</li>
+      <li><a href="06-applied-decoder-insurance.html">Lesson 6</a> — where shift-by-one was first introduced</li>
+      <li><a href="15-explicit-vs-derived-targets.html">Lesson 15</a> — why causality is what makes this valid at all</li>
+    </ul>
+  </div>
+
+  <h2>The question this lesson answers</h2>
+  <p>Take one customer's history, 8 events: <code>[a, b, c, d, e, f, g, h]</code>. You could imagine training on
+  it two different ways:</p>
+  <ul>
+    <li><strong>Enumerate every prefix separately</strong> — <code>x=[a], y=b</code>, then <code>x=[a,b], y=c</code>,
+    all the way to <code>x=[a,...,g], y=h</code>. Seven separate training rows.</li>
+    <li><strong>One shift-by-one pass</strong> — <code>x=[a,...,g], y=[b,...,h]</code>. One row, seven positions
+    supervised simultaneously.</li>
+  </ul>
+  <p>Does the first one give you <em>more</em> to learn from? No — and this lesson shows exactly why, instead of
+  just asserting it.</p>
+
+  <table class="cmp">
+    <tr><th>Position <code>i</code> in the shift-by-one pass</th><th>Built from</th><th>Compared against</th><th>Same as enumerated row</th></tr>
+    <tr><td>0</td><td><code>[a]</code></td><td><code>b</code></td><td><code>x=[a], y=b</code></td></tr>
+    <tr><td>1</td><td><code>[a, b]</code></td><td><code>c</code></td><td><code>x=[a,b], y=c</code></td></tr>
+    <tr><td>2</td><td><code>[a, b, c]</code></td><td><code>d</code></td><td><code>x=[a,b,c], y=d</code></td></tr>
+    <tr><td>...</td><td>...</td><td>...</td><td>...</td></tr>
+    <tr><td>6</td><td><code>[a, ..., g]</code></td><td><code>h</code></td><td><code>x=[a,...,g], y=h</code></td></tr>
+  </table>
+  <p>All seven enumerated rows are already sitting inside the single <code>x=[a,...,g], y=[b,...,h]</code>
+  tensor — <em>if</em> position <code>i</code>'s output genuinely only depends on positions <code>0..i</code>.
+  That "if" is exactly what needs proving, not assuming.</p>
+
+  <h2>The two facts that make it true, not just plausible</h2>
+  <ol>
+    <li><strong>The causal mask.</strong> Position <code>i</code> is mathematically blocked from attending to
+    any position after it — real or padded, doesn't matter (Lesson 1/2).</li>
+    <li><strong>RoPE depends only on absolute position.</strong> The rotation angle for position <code>i</code>
+    is a function of <code>i</code> alone — never of how long the total sequence is. Position 2 rotates the same
+    way whether it's the last position of a length-3 tensor or the third position of a length-8 one.</li>
+  </ol>
+  <p>Together, these mean nothing about tokens after position <code>i</code> — whether they exist at all — can
+  change position <code>i</code>'s computed output. That's a stronger claim than "shift-by-one is a good
+  approximation." It says the two computations are identical by construction.</p>
+
+  <div class="diagram">
+    <div class="grid-label">the same computation, viewed two ways</div>
+    <div class="grid-label" style="margin-top:0;">full sequence — position 2 (c) highlighted</div>
+    <div class="token-row">
+      <div class="tok real">a</div><div class="tok real">b</div><div class="tok cls">c</div><div class="tok masked">d</div><div class="tok masked">e</div><div class="tok masked">f</div><div class="tok masked">g</div><div class="tok masked">h</div>
+    </div>
+    <div class="grid-label" style="margin-top:10px;">truncated prefix — last position (c) highlighted</div>
+    <div class="token-row">
+      <div class="tok real">a</div><div class="tok real">b</div><div class="tok cls">c</div>
+    </div>
+    <p class="diagram-caption">In both views, <code>c</code>'s output is built from exactly <code>{a, b, c}</code> —
+    nothing else exists to attend to in the prefix view, and the causal mask makes sure nothing else is
+    <em>reachable</em> in the full-sequence view. Same attended set, same weights, same output.</p>
+  </div>
+
+  <h2>The runnable proof</h2>
+  <p>Self-contained — needs only the decoder block you already import, nothing from your dataset or fusion code:</p>
+
+  <div class="code-block">
+    <div class="file-tag">prove_shift_by_one.py</div>
+    <pre><code>import torch
+from package.gpt_decoder_block import GPTDecoderBlock
+
+torch.manual_seed(0)
+
+d_model, n_heads, max_len = 16, 4, 8
+decoder = GPTDecoderBlock(d_model, n_heads, max_len)
+decoder.eval()
+
+# one sequence of 8 "events" — random vectors standing in for whatever
+# FusionEmbedding would have produced. The values don't matter — only that the
+# SAME decoder weights process them both ways below.
+full_sequence = torch.randn(1, 8, d_model)
+
+with torch.no_grad():
+    full_out = decoder(full_sequence)   # ONE forward pass over all 8 positions at once
+
+print(f"{'prefix':&lt;10}{'last-pos idx':&lt;14}{'identical?':&lt;12}sample values (first 3 dims)")
+for prefix_len in range(1, 9):
+    prefix = full_sequence[:, :prefix_len]
+    with torch.no_grad():
+        prefix_out = decoder(prefix)     # a SEPARATE forward pass, just this prefix
+
+    from_full   = full_out[:, prefix_len - 1]
+    from_prefix = prefix_out[:, -1]
+    same = torch.allclose(from_full, from_prefix, atol=1e-6)
+
+    label = "abcdefgh"[:prefix_len]
+    print(f"{label:&lt;10}{prefix_len-1:&lt;14}{str(same):&lt;12}"
+          f"full={from_full[0,:3].tolist()}  prefix={from_prefix[0,:3].tolist()}")</code></pre>
+  </div>
+
+  <div class="code-block">
+    <div class="file-tag">expected output</div>
+    <pre><code>prefix    last-pos idx  identical?  sample values (first 3 dims)
+a         0             True        full=[...]  prefix=[...]   (same numbers)
+ab        1             True        full=[...]  prefix=[...]   (same numbers)
+abc       2             True        full=[...]  prefix=[...]   (same numbers)
+...
+abcdefgh  7             True        full=[...]  prefix=[...]   (same numbers)</code></pre>
+  </div>
+
+  <p>Every row should print <code>True</code>, and the <code>full=</code> / <code>prefix=</code> values on each
+  row should be the exact same numbers, not just close. If you want to push on it: print
+  <code>(from_full - from_prefix).abs().max()</code> instead of the boolean — it should be effectively
+  <code>0</code>, differing only by ordinary floating-point rounding, never by anything structural.</p>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — the standard name for this technique</div>
+    <p>Training a causal model by feeding it the true previous tokens (not its own predictions) and computing
+    loss at every position at once is called <strong>teacher forcing</strong>. It's the standard term you'll see
+    in papers and other codebases for exactly what <code>train_insurance.py</code>'s shift-by-one does — worth
+    knowing the name, since "shift-by-one" describes the mechanics but "teacher forcing" is what people actually
+    call the overall technique.</p>
+  </div>
+
+  <h2>Why this matters: the efficiency isn't a minor detail</h2>
+  <p>Enumerating prefixes separately doesn't just do redundant work — the redundancy gets proportionally worse
+  the longer your sequences are. One full pass of length <code>n</code> costs roughly <code>n²</code> (attention
+  is quadratic in sequence length). Enumerating costs <code>1² + 2² + ... + n²</code> — because each shorter
+  prefix pays its own full attention cost, recomputing positions it already computed as part of a shorter prefix
+  moments ago.</p>
+
+  <table class="cmp">
+    <tr><th>Sequence length <code>n</code></th><th>One pass (<code>n²</code>)</th><th>Enumerated (<code>1²+2²+...+n²</code>)</th><th>Waste ratio</th></tr>
+    <tr><td>4</td><td>16</td><td>30</td><td>1.9×</td></tr>
+    <tr><td>8</td><td>64</td><td>204</td><td>3.2×</td></tr>
+    <tr><td>16</td><td>256</td><td>1,496</td><td>5.8×</td></tr>
+    <tr><td>32</td><td>1,024</td><td>11,440</td><td>11.2×</td></tr>
+  </table>
+  <p>The waste ratio grows roughly linearly with sequence length (it approaches <code>n/3</code>) — this isn't a
+  fixed constant overhead you can shrug off, it gets <em>worse</em> the more history a customer has. Getting this
+  right matters more, not less, as your sequences grow.</p>
+
+  <h2>Where this guarantee stops applying</h2>
+  <p>This is specific to the causal, per-position case — it is <em>not</em> a general property of every
+  architecture. <a href="15-explicit-vs-derived-targets.html">Lesson 15</a> already covers why: an encoder+CLS
+  backbone has no causal mask (so the same slicing trick would leak the answer) <em>and</em> collapses the whole
+  sequence into one vector before you get a prediction (so there's no per-position dimension left to slice from
+  even if it didn't leak). Both failures are independent of what's proven here — this lesson's guarantee is real,
+  but it only ever applied to the decoder path to begin with.</p>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Teacher forcing</dt>
+    <dd>Training an autoregressive model by feeding it the ground-truth previous tokens (not its own predictions)
+    and computing loss at every position simultaneously — the standard name for what shift-by-one does.</dd>
+
+    <dt>Causal equivalence</dt>
+    <dd>The guarantee that a causal model's output at position <code>i</code> is identical whether computed as
+    part of a longer sequence or from a truncated prefix ending at <code>i</code> — holds because of the causal
+    mask plus position-only-dependent positional encoding.</dd>
+
+    <dt>Redundant computation</dt>
+    <dd>Recomputing the same result more than once — here, enumerating prefixes recomputes each early position's
+    representation once per longer prefix that also contains it.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>One forward pass over a full sequence, under a causal mask, already contains every enumerated prefix's supervision — proven, not assumed.</li>
+    <li>The guarantee rests on two facts: the causal mask blocks the future, and RoPE's rotation depends only on absolute position.</li>
+    <li>The standard name for this training technique is teacher forcing.</li>
+    <li>Enumerating prefixes separately isn't just wasteful — the waste grows proportionally with sequence length, roughly <code>n/3</code>.</li>
+    <li>This guarantee is specific to causal, per-position architectures — it doesn't transfer to encoder+CLS, for the reasons Lesson 15 already covers.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="15-explicit-vs-derived-targets.html"><span class="dir">Back</span>Lesson 15 — Explicit vs Derived Targets</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

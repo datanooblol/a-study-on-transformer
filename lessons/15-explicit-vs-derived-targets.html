@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 15 — Explicit vs. Derived Targets</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill current" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 15 of 16</p>
+  <h1>Explicit vs. Derived Targets</h1>
+  <p class="subtitle">Where a target actually comes from decides three separate things downstream: how you
+  construct X and y, how many times you normalize, and whether your loss function needs to mask anything. This
+  lesson traces all three back to one root cause — and a third pattern (BERT's own trick) that shows it isn't
+  really a binary choice.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core concept — decides construction, preprocessing, and evaluation, any architecture</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files &amp; lessons to have open alongside this one</span>
+    <ul>
+      <li><code>train_insurance.py</code> — Lesson 6's <code>train()</code>, a <strong>derived</strong> target</li>
+      <li><code>train_insurance_representation_for_claim.py</code> — Lesson 7's <code>train()</code>, an <strong>explicit</strong> target</li>
+      <li><a href="01-attention-and-rope.html">Lesson 1</a> / <a href="02-three-architectures.html">Lesson 2</a> — the causal mask this lesson's deeper reasoning depends on</li>
+      <li><a href="11-bert-pretraining-finetuning.html">Lesson 11</a> — BERT's Masked Language Modeling, this lesson's third pattern</li>
+    </ul>
+  </div>
+
+  <h2>The question underneath the code</h2>
+  <p>Every supervised training loop needs a target to compare its prediction against, and that target comes from
+  exactly one of two places:</p>
+  <ol>
+    <li><strong>Explicit</strong> — the target is its own stored value, independent of whatever the model reads
+    as input.</li>
+    <li><strong>Derived</strong> — the target isn't stored anywhere on its own; it's produced by slicing or
+    transforming a tensor you already have.</li>
+  </ol>
+  <p>It's tempting to shortcut this to "decoders derive, encoders don't" — this repo's own examples make that
+  look true at first glance. It isn't a rule. It's a coincidence of two genuinely independent questions lining up
+  neatly in the cases we've built so far. Separating those two questions is the actual point of this lesson.</p>
+
+  <h2>Two questions, not one</h2>
+  <p>Before deciding how to build X and y, ask both of these — independently:</p>
+  <table class="cmp">
+    <tr><th></th><th>Same kind of data as the input, just a different position?</th><th>A genuinely different quantity, never part of the input sequence?</th></tr>
+    <tr><td><strong>Causal mask + per-position output preserved</strong></td><td>✅ <strong>Derivable</strong> — slice it out, no separate storage needed (Lesson 6, 9)</td><td style="color:var(--text-dim);">moot — if it's a different quantity, there was never anything to slice, regardless of the mask</td></tr>
+    <tr><td><strong>No causal mask, or output collapsed to one vector</strong></td><td>⚠️ <strong>Explicit anyway</strong> — same <em>nature</em> of target a decoder could derive for free, but this architecture can't get it safely or structurally (your multi-task encoder path)</td><td>🚫 <strong>Explicit, and for a completely separate reason</strong> — Lesson 7's <code>claim_amount</code> fails on data type alone</td></tr>
+  </table>
+  <p>Decoder-style shift-by-one satisfies <em>both</em> questions at once, which is exactly why it feels like
+  "the" pattern. But the two failure modes in that table come from different places — one is about what the data
+  <em>is</em>, the other is about what the architecture's <em>structure</em> allows — and conflating them is what
+  makes "encoder = explicit" feel like a rule instead of a coincidence.</p>
+
+  <h2>Why causality is the actual reason, not architecture labels</h2>
+  <p>Here's the precise version of the second question. A decoder's output at position <code>i</code> was built
+  using <em>only</em> positions <code>0..i</code> — the causal mask (Lesson 1/2) guarantees it. So comparing
+  position <code>i</code>'s output against the true value at position <code>i+1</code> is a fair test — the
+  model could not have seen the answer. An encoder has no such guarantee: bidirectional attention means position
+  <code>i</code>'s output has already attended <em>directly</em> to position <code>i+1</code>. Attempting the
+  same "shift and compare" trick there isn't a prediction task at all — the answer is already inside the
+  representation you'd be reading it from.</p>
+
+  <div class="diagram">
+    <div class="grid-label">causal (decoder) — position T2 cannot see T3, so "predicting" T3 from T2 is meaningful</div>
+    <div class="matrix-wrap">
+      <div class="matrix" style="grid-template-columns: 40px repeat(4, 40px);">
+        <div class="mcell h0"></div>
+        <div class="mcell h0">T1</div><div class="mcell h0">T2</div><div class="mcell h0">T3</div><div class="mcell h0">T4</div>
+        <div class="mcell h0">T1</div><div class="mcell h3">●</div><div class="mcell neg">−∞</div><div class="mcell neg">−∞</div><div class="mcell neg">−∞</div>
+        <div class="mcell h0">T2</div><div class="mcell h2">●</div><div class="mcell h3">●</div><div class="mcell neg pos">−∞</div><div class="mcell neg">−∞</div>
+        <div class="mcell h0">T3</div><div class="mcell h1">●</div><div class="mcell h2">●</div><div class="mcell h3">●</div><div class="mcell neg">−∞</div>
+        <div class="mcell h0">T4</div><div class="mcell h1">●</div><div class="mcell h1">●</div><div class="mcell h2">●</div><div class="mcell h3">●</div>
+      </div>
+    </div>
+    <p class="diagram-caption">The highlighted T2→T3 cell is blocked — T2's output genuinely doesn't know what T3
+    is. That's what makes "T2's output should predict T3" a real training signal instead of a leak.</p>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">bidirectional (encoder) — T2 already attends to T3 directly</div>
+    <div class="matrix-wrap">
+      <div class="matrix" style="grid-template-columns: 40px repeat(4, 40px);">
+        <div class="mcell h0"></div>
+        <div class="mcell h0">T1</div><div class="mcell h0">T2</div><div class="mcell h0">T3</div><div class="mcell h0">T4</div>
+        <div class="mcell h0">T1</div><div class="mcell h2">●</div><div class="mcell h2">●</div><div class="mcell h2">●</div><div class="mcell h2">●</div>
+        <div class="mcell h0">T2</div><div class="mcell h2">●</div><div class="mcell h3">●</div><div class="mcell h4 pos">●</div><div class="mcell h2">●</div>
+        <div class="mcell h0">T3</div><div class="mcell h2">●</div><div class="mcell h2">●</div><div class="mcell h3">●</div><div class="mcell h2">●</div>
+        <div class="mcell h0">T4</div><div class="mcell h2">●</div><div class="mcell h2">●</div><div class="mcell h2">●</div><div class="mcell h3">●</div>
+      </div>
+    </div>
+    <p class="diagram-caption">The highlighted T2→T3 cell is <em>open</em> — T2's output has already looked
+    directly at T3. Reading T2's output to "predict" T3 here would just be echoing something it already saw.</p>
+  </div>
+
+  <p>This is the real mechanism behind the first row of the table above — not "decoders are built for this,"
+  but "only a causal mask makes slicing a valid, non-leaking training signal in the first place."</p>
+
+  <h2>Case 1 — derived (Lesson 6, and Lesson 9's time-series sketch)</h2>
+  <p><code>train_insurance.py</code> normalizes <code>age</code> exactly <strong>once</strong>. Prediction and
+  target both come from slicing that same tensor:</p>
+
+  <div class="code-block">
+    <div class="file-tag">train_insurance.py — train()</div>
+    <pre><code>age_norm = age_normalizer.transform(age)          # normalize ONCE
+...
+policy_logits, age_pred, price_pred = model(policy, age_norm, price_norm)
+
+pred_age = age_pred[:, :-1]    # prediction slice — positions 0..n-2
+tgt_age  = age_norm[:, 1:]     # target slice — the SAME tensor, positions 1..n-1</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">one normalized sequence, sliced two overlapping ways</div>
+    <div class="token-row">
+      <div class="tok real">N0</div><div class="tok cls">N1</div><div class="tok cls">N2</div><div class="tok cls">N3</div><div class="tok real">N4</div>
+    </div>
+    <div class="grid-label" style="margin-top:10px;">input / prediction slice — <code>[:-1]</code></div>
+    <div class="token-row">
+      <div class="tok real">N0</div><div class="tok cls">N1</div><div class="tok cls">N2</div><div class="tok cls">N3</div>
+    </div>
+    <div class="grid-label" style="margin-top:10px;">target slice — <code>[1:]</code></div>
+    <div class="token-row">
+      <div class="tok cls">N1</div><div class="tok cls">N2</div><div class="tok cls">N3</div><div class="tok real">N4</div>
+    </div>
+    <p class="diagram-caption">N1–N3 appear in <em>both</em> slices — normalizing once and slicing twice avoids
+    transforming that overlap twice. Lesson 9's time-series sketch uses the identical pattern with sensor
+    readings instead of purchases — same reasoning, different domain.</p>
+  </div>
+  <p style="font-size:0.85rem; color:var(--text-dim);">This section asserts that slicing gives you every
+  enumerated prefix's supervision for free — <a href="16-proving-shift-by-one.html">Lesson 16</a> proves it directly,
+  with a script that checks the claim numerically rather than asking you to take it on faith.</p>
+
+  <h2>Case 2a — explicit because the data type doesn't match (Lesson 7)</h2>
+  <p><code>claim_amount</code> was never part of the purchase/claim/payment sequences — it's an independently
+  observed outcome, not "the next value" of anything in the input:</p>
+
+  <div class="code-block">
+    <div class="file-tag">train_insurance_representation_for_claim.py — train()</div>
+    <pre><code>claim_norm = claim_normalizer.transform(claim_amount)   # a SEPARATE tensor, its own normalizer
+pred = model(purchases, claims, payments, profile_norm)
+loss = loss_fn(pred, claim_norm)</code></pre>
+  </div>
+  <p>No architecture, causal or not, could derive this by slicing — there's nothing in the input sequences that
+  <em>is</em> a claim amount one step later. This fails the first question in the table, full stop.</p>
+
+  <h2>Case 2b — explicit despite matching data type (your multi-task encoder path)</h2>
+  <p>This is the case worth sitting with, because it's the one that breaks "encoder = explicit" as a clean rule.
+  Predicting next item/age/price/sum_insure is the <em>same kind of data</em> as the input sequence — exactly
+  like Lesson 6. The reason it still needs <code>expand_into_prefixes</code> building explicit rows isn't the
+  data at all. It's that CLS pooling collapses the whole sequence into one vector before you ever get a
+  prediction — there's no per-position dimension left to slice afterward — and there's no causal mask either, so
+  even if the dimension survived, slicing it would leak exactly like the bidirectional diagram above. Two
+  separate failures of the second question, at once.</p>
+
+  <h2>Case 3 — hide the answer instead of avoiding the setup (BERT's MLM)</h2>
+  <p>Lesson 11's Masked Language Modeling shows there's a third option, not just "give up and store the target
+  separately." BERT keeps the bidirectional encoder <em>and</em> keeps the target conceptually inside the
+  sequence — it solves the leak a different way: replace the specific input position being predicted with
+  <code>[MASK]</code>, so there's nothing left at that position for attention to leak.</p>
+
+  <div class="diagram">
+    <div class="token-row">
+      <div class="tok cls">CLS</div>
+      <div class="tok real">The</div>
+      <div class="tok hidden">MASK</div>
+      <div class="tok real">sat</div>
+      <div class="tok real">on</div>
+      <div class="tok real">the</div>
+      <div class="tok real">mat</div>
+      <div class="tok cls">SEP</div>
+    </div>
+    <p class="diagram-caption">The target ("cat") isn't stored as a separate field the way Lesson 7's
+    <code>claim_amount</code> is — it's still <em>positionally</em> the same sequence. What changes is the
+    <em>input</em> at that one position, not the architecture or the storage. Bidirectional attention over every
+    other position stays completely valid, because the one position that would have leaked has had its answer
+    removed at the source.</p>
+  </div>
+
+  <table class="cmp">
+    <tr><th>Pattern</th><th>How it avoids leaking the answer</th><th>Where the target lives</th></tr>
+    <tr><td>Derived (Lesson 6)</td><td>causal mask — the future is architecturally invisible</td><td>a slice of the same tensor as the input</td></tr>
+    <tr><td>Explicit (Lesson 7, your encoder path)</td><td>doesn't need to avoid a leak — there's nothing shared to leak</td><td>its own separately stored field</td></tr>
+    <tr><td>Hidden-then-predict (BERT MLM)</td><td>the specific input position is removed, not the architecture's structure</td><td>still positionally inside the sequence — recoverable because you remember what you hid</td></tr>
+  </table>
+
+  <h2>What this means for preprocessing</h2>
+  <table class="cmp">
+    <tr><th></th><th>Derived</th><th>Explicit</th></tr>
+    <tr><td>Normalization calls needed</td><td>one per continuous feature — slice after</td><td>one per continuous feature, <em>including the target</em></td></tr>
+    <tr><td>When slicing happens</td><td>after normalizing, inside the training loop</td><td>N/A — nothing to slice</td></tr>
+    <tr><td>A generic "normalize everything" helper</td><td>would need unused extra arguments</td><td>a natural fit — every value genuinely needs its own call</td></tr>
+  </table>
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — where a real bug came from</div>
+    <p>A multi-task encoder project had a normalization helper built for exactly the explicit shape — three
+    inputs, three separately-stored targets, six <code>.transform()</code> calls. When a decoder-style project
+    needed the derived pattern instead — three inputs, no separate targets at all — that six-argument helper
+    didn't fit. Writing the three calls out by hand, without a matching helper's structure to lean on, is exactly
+    how two of them ended up calling the wrong normalizer (<code>price</code> and <code>sum_insure</code> both
+    accidentally used <code>age_normalizer</code>) — a slip that ran with no error and silently trained on the
+    wrong scale. A helper built for one shape will actively mislead you in the other.</p>
+  </div>
+
+  <h2>What this means for evaluation</h2>
+  <p>This is the part worth understanding as deeply as the normalization half, because it's the same root cause
+  showing up somewhere completely different: <strong>whether your loss function needs to mask anything at all.</strong></p>
+  <table class="cmp">
+    <tr><th></th><th>Explicit (prefix-enumeration)</th><th>Derived (shift-by-one)</th></tr>
+    <tr><td>Can the target ever be padding?</td><td>No — every row is constructed to have exactly one valid target</td><td>Yes — slicing a padded sequence still contains PAD positions in the result</td></tr>
+    <tr><td>Classification loss</td><td>plain <code>cross_entropy</code>, nothing to mask</td><td><code>cross_entropy(..., ignore_index=0)</code> — masking built in</td></tr>
+    <tr><td>Regression loss</td><td>plain <code>mse_loss</code>, nothing to mask</td><td>a hand-written <code>masked_mse</code> — no built-in equivalent exists</td></tr>
+  </table>
+  <p>Why the asymmetry between the two losses: <code>CrossEntropyLoss</code> ships with <code>ignore_index</code>
+  because classification targets are discrete — PAD can be assigned its own reserved class id (<code>0</code>)
+  and the loss can special-case it. Continuous regression targets have no equivalent "reserved value" to special
+  case — a padded age is just a number like any other — so PyTorch has no generic way to know it's fake. You have
+  to supply that knowledge yourself, which is exactly what <code>masked_mse</code> is for.</p>
+
+  <div class="callout good">
+    <div class="callout-title">✓ Pattern worth reusing — the same masking idea, generalized</div>
+    <p><code>ignore_index</code>-style masking isn't really "a padding feature" — it's a general tool for "some
+    positions in my target tensor aren't valid to grade." Padding is one reason a position might be invalid
+    (Lesson 6's decoder). BERT's MLM has the exact same requirement for a completely different reason: only the
+    positions that were actually masked should contribute to the loss — every unmasked position must be ignored
+    too, or the model would be graded on predicting words it was already shown outright. Same mechanism
+    (mask out the invalid positions before averaging), two unrelated reasons to need it.</p>
+  </div>
+
+  <h2>Putting all three together</h2>
+  <div class="diagram">
+    <div class="stack">
+      <div class="stack-box accent">Is the target the same kind of data as the input, just shifted?</div>
+      <div class="stack-arrow">↓ no → explicit, for a data-type reason (Lesson 7)</div>
+      <div class="stack-box accent">Does this architecture keep a causal mask AND a per-position output?</div>
+      <div class="stack-arrow">↓ no → explicit anyway, for a structural reason (your encoder path) — or hide the input instead (BERT)</div>
+      <div class="stack-box">Derivable — normalize once, slice after, mask the loss for padding</div>
+    </div>
+  </div>
+  <p>Three consequences fall out of wherever you land on this: how many things you construct as separate tensors,
+  how many times you call <code>.transform()</code>, and whether your loss functions need <code>ignore_index</code>
+  or a hand-written mask at all. All three trace back to the same one or two questions — they aren't three
+  separate design decisions to make independently.</p>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Explicit target</dt>
+    <dd>A target stored as its own value, independent of the model's input tensors.</dd>
+
+    <dt>Derived target</dt>
+    <dd>A target produced by slicing or transforming a tensor you already have — no separate storage.</dd>
+
+    <dt>Attention leakage</dt>
+    <dd>When a position's output already had direct access to the value it's being asked to "predict," making
+    the prediction meaningless — the failure mode a causal mask exists to prevent.</dd>
+
+    <dt>Hidden-then-predict</dt>
+    <dd>A third pattern (BERT's MLM): keep the target positionally inside the sequence, but remove the specific
+    input at that position so bidirectional attention over the rest stays valid.</dd>
+
+    <dt>ignore_index / masked loss</dt>
+    <dd>A general mechanism for excluding invalid target positions from a loss's average — built into
+    <code>CrossEntropyLoss</code> for discrete targets, requires a hand-written mask for continuous ones.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Ask two separate questions, not one: is the target the same kind of data as the input, and does this architecture's mask + output shape allow deriving it safely?</li>
+    <li>A causal mask is what makes "slice out the next position" a valid, non-leaking training signal — not an arbitrary decoder convention.</li>
+    <li>When both questions say yes, normalize once and slice after; when either says no, the target needs its own storage and its own normalization call.</li>
+    <li>There's a third option beyond "derive" or "store separately" — hide the specific input instead, as BERT's MLM does, if you want a bidirectional model to predict something already inside its own sequence.</li>
+    <li>Whether your loss needs a mask traces back to the same root cause: explicit targets are never padding by construction; derived targets inherit whatever padding the original sequence had.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="14-baselines-and-checkpointing.html"><span class="dir">Back</span>Lesson 14 — Baselines &amp; Checkpointing</a>
+    <a class="next" href="16-proving-shift-by-one.html"><span class="dir">Next</span>Lesson 16 — Proving Shift-by-One →</a>
+  </div>
+</main>
+</body>
+</html>

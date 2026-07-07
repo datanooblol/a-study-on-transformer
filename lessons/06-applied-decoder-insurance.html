@@ -27,12 +27,14 @@
       <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
       <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
       <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 6 of 14</p>
+  <p class="eyebrow">Lesson 6 of 16</p>
   <h1>Applied Project: Next-Purchase Forecasting</h1>
   <p class="subtitle">A decoder-only (GPT-style) model that reads a customer's purchase history and predicts
   three things about their <em>next</em> purchase at once: which policy, at what age, for what price.</p>
@@ -92,7 +94,9 @@ def forward(self, policy, age, price):
   <h2>Step 2 — causal decoding, shifted targets</h2>
   <p>The sequence of event vectors goes through <code>MaskedSelfAttention</code> (Lesson 1/2) — each event only
   sees itself and earlier events. That means position <code>i</code>'s output was built entirely from events
-  <code>0..i</code>, so it's exactly the right vector to use for predicting event <code>i+1</code>.</p>
+  <code>0..i</code>, so it's exactly the right vector to use for predicting event <code>i+1</code>. <a href="16-proving-shift-by-one.html">Lesson 16</a>
+  proves this precisely — one pass over the full sequence really does contain every shorter prefix's prediction, not
+  just approximately.</p>
 
   <div class="diagram">
     <div class="grid-label">customer history: A(25,105) → C(28,95) → A(31,110)</div>
@@ -125,6 +129,9 @@ loss_price  = cont_loss_fn(pred_price, tgt_price)  # MSELoss</code></pre>
   high and too low as equally bad — a reasonable default. See <a href="12-asymmetric-losses-and-constraints.html">Lesson 12</a>
   for when that assumption breaks down (e.g. a value like age that can only move in one direction) and what to do
   about it instead.</p>
+  <p style="font-size:0.85rem; color:var(--text-dim);">Notice <code>tgt_age</code> is a slice of the same
+  <code>age_norm</code> tensor used for the input, not a separately-stored value — <a href="15-explicit-vs-derived-targets.html">Lesson 15</a>
+  covers why that matters for how many times you need to normalize, contrasted with Lesson 7's approach.</p>
 
   <h2>Step 3 — three heads, three tasks, one shared trunk</h2>
   <div class="code-block">

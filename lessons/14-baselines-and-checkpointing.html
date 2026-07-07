@@ -27,12 +27,14 @@
       <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
       <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
       <a class="pill current" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
     </nav>
   </div>
 </header>
 
 <main class="page">
-  <p class="eyebrow">Lesson 14 of 14</p>
+  <p class="eyebrow">Lesson 14 of 16</p>
   <h1>Baselines &amp; Checkpointing in Practice</h1>
   <p class="subtitle">Lesson 13 named two things to do: compute a real baseline, and stop keeping the wrong
   checkpoint. This lesson is the concrete, working code for both — ready to fold into any training loop in this
@@ -223,7 +225,7 @@ model.load_state_dict(best_state_dict)   # restore the best version seen, not wh
 
   <div class="lesson-footer">
     <a href="13-reading-training-signals.html"><span class="dir">Back</span>Lesson 13 — Reading Training Signals</a>
-    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+    <a class="next" href="15-explicit-vs-derived-targets.html"><span class="dir">Next</span>Lesson 15 — Explicit vs Derived Targets →</a>
   </div>
 </main>
 </body>

@@ -27,6 +27,8 @@
       <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
       <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
       <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
     </nav>
   </div>
 </header>
@@ -35,10 +37,11 @@
   <p class="eyebrow">Study Curriculum</p>
   <h1>A Study on Transformer</h1>
   <p class="subtitle">Understanding transformer architecture inside out — not as a language model, but as a general
-  sequence-processing pattern applied to insurance customer data. Fourteen lessons, most grounded in the actual
+  sequence-processing pattern applied to insurance customer data. Sixteen lessons, most grounded in the actual
   code in this repo, covering two examples of the pattern applied outside insurance/NLP entirely, a multi-task
   extension of the encoder project, the real-world model (BERT) behind the CLS trick studied along the way, loss
-  functions beyond plain MSE, and how to read — and act on — whether any of it actually worked.</p>
+  functions beyond plain MSE, how to read — and act on — whether any of it actually worked, where a target value
+  actually comes from, and a runnable proof of the guarantee that makes shift-by-one work at all.</p>
 
   <h2>How to use this</h2>
   <p>Read the lessons in order the first time — each one builds on the last. After that, use the pill nav above
@@ -105,6 +108,10 @@
       <div class="stack-box">Lesson 13 — Reading Training Signals<span class="sub">overfitting, naive baselines, and ceilings — from a real training run</span></div>
       <div class="stack-arrow">↓</div>
       <div class="stack-box">Lesson 14 — Baselines &amp; Checkpointing<span class="sub">the concrete code: a real Bayes-optimal baseline, checkpoint tracking, early stopping</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 15 — Explicit vs Derived Targets<span class="sub">where does your target actually come from — a stored value, or a slice? — contrasting Lessons 6 &amp; 7</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 16 — Proving Shift-by-One<span class="sub">a runnable script proving one pass equals every enumerated prefix, not approximately</span></div>
     </div>
   </div>
 
@@ -135,6 +142,8 @@
     <tr><td>12</td><td><a href="12-asymmetric-losses-and-constraints.html">Asymmetric Losses</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>What if predicting too high and too low aren't equally bad — or one of them is outright impossible?</td></tr>
     <tr><td>13</td><td><a href="13-reading-training-signals.html">Reading Training Signals</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>The loss is falling — but is the model actually learning anything, or just memorizing?</td></tr>
     <tr><td>14</td><td><a href="14-baselines-and-checkpointing.html">Baselines &amp; Checkpointing</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>How do you actually compute "the best possible score," and actually keep the best model you trained?</td></tr>
+    <tr><td>15</td><td><a href="15-explicit-vs-derived-targets.html">Explicit vs Derived Targets</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>Does your target already exist as its own value, or is it a slice of something you already have?</td></tr>
+    <tr><td>16</td><td><a href="16-proving-shift-by-one.html">Proving Shift-by-One</a></td><td><span class="arch-badge dec inline"><span class="dot"></span>Decoder-only</span></td><td>Does enumerating every prefix separately actually give you more to learn from than one shift-by-one pass?</td></tr>
   </table>
 
   <h2>Repo map</h2>
@@ -152,6 +161,8 @@
       <li>lesson 12 (Asymmetric Losses) also has no source file — none of the applied projects need it yet, but it generalizes to any regression head in lessons 6, 7, or 10</li>
       <li>lesson 13 (Reading Training Signals) also has no source file — it's a diagnostic skill grounded in a real training run, applicable to every project in this repo</li>
       <li>lesson 14 (Baselines &amp; Checkpointing) also has no source file — its baseline code references <code>sample_category()</code>/<code>ITEM_IDS_BY_CAT</code> from the same mock-data pattern used in lessons 6, 7, and 10</li>
+      <li>lesson 15 (Explicit vs Derived Targets) is grounded directly in <code>train_insurance.py</code> (lesson 6) and <code>train_insurance_representation_for_claim.py</code> (lesson 7) — no new file, just a contrast between two already-studied ones</li>
+      <li>lesson 16 (Proving Shift-by-One) runs <code>package/gpt_decoder_block.py</code>'s <code>GPTDecoderBlock</code> directly — the only lesson with a script meant to be executed and checked, not just read</li>
     </ul>
   </div>
 

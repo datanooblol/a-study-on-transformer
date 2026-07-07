@@ -1,0 +1,7 @@
+architecture,fusion,best_epoch,val_loss,item_acc,age_mae,price_mae,sum_insure_mae
+decoder,concat_all,30,2.9486,0.1594,1.25,1562.45,26407.55
+decoder,concat_emb_summed,30,2.9766,0.1993,1.27,1527.67,25872.87
+decoder,sum,30,2.9685,0.1413,1.29,1533.61,26975.46
+encoder,concat_all,40,2.3003,0.1667,1.27,1498.06,25641.05
+encoder,concat_emb_summed,25,2.5773,0.1558,1.27,1532.56,27131.27
+encoder,sum,30,2.6081,0.1486,1.28,1481.43,27745.58

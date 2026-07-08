@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 17 — Event Attribution (Occlusion &amp; LOEO)</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill current" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 17 of 19</p>
+  <h1>Event Attribution: Occlusion &amp; Leave-One-Event-Out (LOEO)</h1>
+  <p class="subtitle">Every lesson so far explains how the model computes something, in general. This one is
+  different: the model is already trained, it just made <em>one</em> prediction for <em>one</em> customer — which
+  of that customer's past events actually caused it? Occlusion answers this by re-running the model with one event
+  blanked out at a time and watching what changes. Applied position-by-position across a whole sequence, this is
+  called Leave-One-Event-Out (LOEO).</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge multi"><span class="dot"></span>Applies to both encoder-only and decoder-only — this lesson runs it on both and compares</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this one</span>
+    <ul>
+      <li><code>sequences_to_multiple_outcomes.ipynb</code> — the side-project notebook this lesson's code, models, and results all come from directly (2 architectures × 3 fusion strategies, next-item/age/price/sum_insure prediction)</li>
+      <li><code>package/encoder_block.py</code>, <code>package/gpt_decoder_block.py</code> — the <code>masked_fill(mask, -inf)</code> mechanism this lesson's occlusion trick reuses as-is</li>
+      <li><a href="16-proving-shift-by-one.html">Lesson 16</a> — the causal-mask + RoPE facts this lesson leans on again, from the opposite direction</li>
+    </ul>
+  </div>
+
+  <h2>The question this lesson answers</h2>
+  <p>A trained model looks at a customer's purchase/claim/payment history and predicts: next item = category 4,
+  next age = 62, next price = 1,192, next sum insured = 130,153. Fine — but <em>why</em>? Which specific past
+  events pushed it toward that answer, and which barely mattered? None of Lessons 1–16 answer this, because they're
+  all about architecture and training — how the model is built, how it learns. This lesson is about
+  <strong>post-hoc explainability</strong>: probing a model that's already finished training, one prediction at a
+  time.</p>
+
+  <h2>Occlusion, and LOEO as its systematic form</h2>
+  <p><strong>Occlusion</strong> is the general idea: blank out part of the input, re-run the model, see how much
+  the output moves. Big change = that part mattered a lot; near-zero change = it barely mattered.
+  <strong>Leave-One-Event-Out (LOEO)</strong> is just occlusion applied in a loop — one customer event removed at a
+  time, cycling through every position in their history, producing one importance score per event.</p>
+
+  <div class="diagram">
+    <div class="grid-label">one customer's history — occlude one event, re-run, measure the change</div>
+    <div class="token-row">
+      <div class="tok real">buy</div><div class="tok real">pay</div><div class="tok masked">claim</div><div class="tok real">pay</div><div class="tok real">miss</div>
+    </div>
+    <div class="diagram-caption">baseline prediction with all 5 events → re-run with "claim" occluded → <code>impact = baseline − occluded</code>. Repeat for every position; rank by |impact|.</div>
+  </div>
+
+  <h2>Why "delete and shift" breaks — and the clean fix</h2>
+  <p>The obvious way to "remove" event <code>c</code> is to delete it from the list and shift everything after it
+  down one slot. Under RoPE, that's wrong: RoPE's rotation angle depends only on a token's <em>absolute
+  position</em> (<a href="16-proving-shift-by-one.html">Lesson 16</a>), so shifting <code>d, e, f, g, h</code> into
+  new slots changes their rotation too. You'd be measuring two things at once — "what changed because event
+  <code>c</code>'s information is gone" and "what changed because five other events got new position
+  encodings" — with no way to tell them apart.</p>
+
+  <div class="diagram">
+    <div class="grid-label">original — positions 0..7</div>
+    <div class="token-row">
+      <div class="tok real">a₀</div><div class="tok real">b₁</div><div class="tok real">c₂</div><div class="tok real">d₃</div><div class="tok real">e₄</div><div class="tok real">f₅</div><div class="tok real">g₆</div><div class="tok real">h₇</div>
+    </div>
+    <div class="grid-label" style="margin-top:14px;">naive delete + reindex — every later event's position changed</div>
+    <div class="token-row">
+      <div class="tok real">a₀</div><div class="tok real">b₁</div><div class="tok hidden">d₂</div><div class="tok hidden">e₃</div><div class="tok hidden">f₄</div><div class="tok hidden">g₅</div><div class="tok hidden">h₆</div>
+    </div>
+    <div class="grid-label" style="margin-top:14px;">mask-in-place — same 8 slots, only <code>c</code> changes</div>
+    <div class="token-row">
+      <div class="tok real">a₀</div><div class="tok real">b₁</div><div class="tok masked">c₂</div><div class="tok real">d₃</div><div class="tok real">e₄</div><div class="tok real">f₅</div><div class="tok real">g₆</div><div class="tok real">h₇</div>
+    </div>
+    <div class="diagram-caption">Highlighted (purple) subscripts in row 2 show every position from <code>d</code> onward got a new index — a
+    second variable changing alongside "c is gone." Row 3 changes only <code>c</code>; everyone else keeps their
+    exact original position and rotation.</div>
+  </div>
+
+  <p>This repo's masking convention (<code>True = PAD</code>, <code>pad_mask_source = items</code>,
+  <code>padding_idx=0</code> — see <a href="04-datasets-and-pipelines.html">Lesson 4</a>) already gives us the fix
+  for free: set the occluded event's item id to <code>0</code> and pass that same tensor as the mask source. That
+  simultaneously (a) embeds it to the zero vector reserved for PAD, and (b) makes
+  <code>masked_fill(mask, -inf)</code> block every other position from attending to it as a key — with the
+  sequence length and every other token's position completely unchanged.</p>
+
+  <div class="matrix-wrap">
+    <div class="matrix" style="grid-template-columns: repeat(6, 40px);">
+      <div class="mcell h3">a</div><div class="mcell h2">b</div><div class="mcell neg">✕</div><div class="mcell h4">d</div><div class="mcell h1">e</div><div class="mcell h5">f</div>
+    </div>
+  </div>
+  <p class="diagram-caption">One query's attention weights over 6 keys, with <code>c</code> occluded — its weight
+  is forced to exactly <code>0</code>, every other key keeps its original weight and position.</p>
+
+  <h2>Two positions you can't occlude this way — and why</h2>
+  <p>Two edge cases surfaced directly from running this on real trained models — both are structural, not bugs.</p>
+
+  <ol>
+    <li><strong>The read-out position itself.</strong> For the decoder, the prediction you're reading comes from
+    the <em>last real position's own row</em> — occluding it corrupts the query doing the reading, not just a
+    memory being read. (The encoder has no such restriction — CLS is a separate token, always distinct from every
+    event position.)</li>
+    <li><strong>The causal decoder's very first position.</strong> Under a causal mask, position 0 is legal to
+    attend to only <em>itself</em> — there's no earlier position to fall back on. Occlude position 0, and its own
+    row's only legal key is now also masked. Every score in that row is <code>-inf</code>.</li>
+  </ol>
+
+  <h3>A slow walkthrough of edge case 2 — a 3-position toy example</h3>
+  <p>The claim above is easy to state and easy to misread as "position 0 just contributes nothing, which is
+  fine." It's worth walking through with real arithmetic why that's wrong — the failure isn't "no information,"
+  it's <code>NaN</code>, and <code>NaN</code> doesn't stay put.</p>
+
+  <div class="diagram">
+    <div class="grid-label">who each query is causally allowed to look at, in a 3-event sequence</div>
+    <table class="cmp">
+      <tr><th>Query position</th><th>Allowed keys</th></tr>
+      <tr><td>0</td><td>{0} — only itself</td></tr>
+      <tr><td>1</td><td>{0, 1}</td></tr>
+      <tr><td>2</td><td>{0, 1, 2}</td></tr>
+    </table>
+    <p class="diagram-caption">Position 0 is the only query with just one legal option. Every other position
+    always has an earlier fallback.</p>
+  </div>
+
+  <p><strong>Step 1 — occlude position 0: its own row loses its only option.</strong> Marking position 0 as PAD
+  blocks key 0 for every query. For query position 0 specifically, key 0 was also its <em>only</em> causally legal
+  key — keys 1 and 2 were already blocked by the causal mask (they're in the future). So all three scores in
+  position 0's row are forced to <code>-inf</code>:</p>
+  <div class="matrix-wrap">
+    <div class="matrix" style="grid-template-columns: repeat(3, 40px);">
+      <div class="mcell neg">✕</div><div class="mcell neg">✕</div><div class="mcell neg">✕</div>
+    </div>
+  </div>
+  <p class="diagram-caption">query = position 0's score row over keys {0, 1, 2} — every entry is <code>-inf</code>.</p>
+
+  <p><strong>Step 2 — <code>softmax</code> of an all-<code>-inf</code> row is undefined, not zero.</strong>
+  <code>softmax</code> computes <code>e^score</code> for each entry, then divides by their sum.
+  <code>e^(-inf) = 0</code> for all three, so the sum is <code>0</code>, and every weight is <code>0/0</code>. That
+  has no defined value — it isn't "all keys get zero probability," it's arithmetically undefined. Floating point
+  represents an undefined result as <code>NaN</code>. So position 0's attention weights become
+  <code>[NaN, NaN, NaN]</code>, not <code>[0, 0, 0]</code>.</p>
+
+  <p><strong>Step 3 — that <code>NaN</code> becomes position 0's real output.</strong> The layer computes
+  position 0's output as <code>NaN·V₀ + NaN·V₁ + NaN·V₂</code>. Any arithmetic touching <code>NaN</code> produces
+  <code>NaN</code>, so this is a vector of <code>NaN</code>s. It gets added back via the residual connection and
+  passed through LayerNorm — still <code>NaN</code>. After this layer, <strong>position 0's entire hidden
+  state is <code>NaN</code></strong>, every dimension.</p>
+
+  <p><strong>Step 4 — the next layer: position 1 assigns position 0 a clean, correct <code>0.0</code>.</strong>
+  Position 1's allowed keys are {0, 1}. Key 0 is still masked (the same pad mask is reused at every layer), key 1
+  is open. This time the row is <code>[-inf, s]</code> for some real score <code>s</code> — <em>not</em> all
+  <code>-inf</code>, so <code>softmax</code> resolves cleanly:</p>
+  <div class="matrix-wrap">
+    <div class="matrix" style="grid-template-columns: repeat(2, 40px);">
+      <div class="mcell h0">0.0</div><div class="mcell h4">1.0</div>
+    </div>
+  </div>
+  <p class="diagram-caption">query = position 1's attention weights over keys {0, 1} — a properly computed,
+  finite <code>0.0</code> on key 0. Masking is doing exactly what it should here.</p>
+
+  <p><strong>Step 5 — but <code>0.0 × NaN = NaN</code>, not <code>0.0</code>.</strong> Position 1's output is
+  <code>0.0 · V₀ + 1.0 · V₁</code>. <code>V₀</code> comes from applying a linear layer to position 0's hidden
+  state, which is entirely <code>NaN</code> (step 3) — so <code>V₀ = NaN</code>. In IEEE floating point,
+  multiplying by exactly zero does not "clean" a <code>NaN</code>: <code>NaN</code> means "this value is unknown,"
+  and zero times an unknown value is still unknown. So <code>0.0 × NaN = NaN</code>, and position 1's output
+  becomes <code>NaN + 1.0·V₁ = NaN</code> too — even though position 1 never intended to use position 0 at all,
+  and its attention weight proves it correctly assigned zero importance.</p>
+
+  <p><strong>Step 6 — this repeats, layer after layer.</strong> Every later position's weighted sum also touches
+  <code>V₀</code> (always with weight <code>0.0</code>, always still poisoned), so by the final layer, whichever
+  position you actually read out is <code>NaN</code> too. This is exactly what showed up mid-session: occluding
+  position 0 alone turned <em>every</em> column of the LOEO output into <code>NaN</code>, while occluding positions
+  1 through <code>length-2</code> was completely fine — because only position 0 ever produces the fully-masked row
+  that creates the <code>NaN</code> in the first place. Any other occluded position still leaves its query at
+  least one open, earlier fallback key, so its row is never entirely <code>-inf</code> and no <code>NaN</code> is
+  ever created to begin with.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / gotcha — NaN via <code>0 × NaN</code>, not a bug in your code</div>
+    <p>In short: masking correctly assigns a poisoned key exactly <code>0.0</code> attention weight, but if that
+    key's own value is already <code>NaN</code> (because it had no legal keys of its own to attend to), the
+    <code>0.0</code> weight does not neutralize it — <code>0.0 × NaN = NaN</code> — and the <code>NaN</code>
+    rides along through every later layer and position regardless of how small its assigned weight is.</p>
+  </div>
+
+  <p>The fix is one line — restrict the occlusion range so it never touches either edge case:</p>
+  <div class="code-block">
+    <div class="file-tag">valid occlusion positions</div>
+    <pre><code>positions = range(length) if architecture == "encoder" else range(1, length - 1)</code></pre>
+  </div>
+
+  <h2>Implementation</h2>
+  <p>Two pieces: a single-sequence prediction helper that knows where each architecture's "one real prediction"
+  lives, and a loop that occludes every valid position and records the delta.</p>
+
+  <div class="code-block">
+    <div class="file-tag">sequences_to_multiple_outcomes.ipynb (excerpt)</div>
+    <pre><code>def predict_one(model, architecture, items_list, ages_list, prices_list, sum_insures_list):
+    length = len(items_list)
+    items_t = torch.tensor(pad(items_list, MAX_EVENTS), dtype=torch.long).unsqueeze(0)
+    ages_t = torch.tensor(pad(ages_list, MAX_EVENTS, 0.0), dtype=torch.float).unsqueeze(0).unsqueeze(-1)
+    prices_t = torch.tensor(pad(prices_list, MAX_EVENTS, 0.0), dtype=torch.float).unsqueeze(0).unsqueeze(-1)
+    sum_insures_t = torch.tensor(pad(sum_insures_list, MAX_EVENTS, 0.0), dtype=torch.float).unsqueeze(0).unsqueeze(-1)
+
+    ages_norm = age_normalizer.transform(ages_t)
+    prices_norm = price_normalizer.transform(prices_t)
+    sum_insures_norm = sum_insure_normalizer.transform(sum_insures_t)
+
+    with torch.no_grad():
+        item_logits, age_pred, price_pred, sum_insure_pred = model(
+            [items_t], [ages_norm, prices_norm, sum_insures_norm], pad_mask_source=items_t
+        )
+
+    if architecture == "decoder":
+        # read out at the last real position -- the only genuinely unobserved prediction
+        item_logits = item_logits[:, length - 1]
+        age_pred = age_pred[:, length - 1]
+        price_pred = price_pred[:, length - 1]
+        sum_insure_pred = sum_insure_pred[:, length - 1]
+
+    item_probs = item_logits.softmax(dim=-1).squeeze(0)
+    return {
+        "item_probs": item_probs,
+        "age": age_normalizer.inverse_transform(age_pred).item(),
+        "price": price_normalizer.inverse_transform(price_pred).item(),
+        "sum_insure": sum_insure_normalizer.inverse_transform(sum_insure_pred).item(),
+    }
+
+def loeo_for_customer(model, architecture, items_full, ages_full, prices_full, sum_insures_full, customer_idx):
+    items_prefix, ages_prefix = items_full[:-1], ages_full[:-1]
+    prices_prefix, sum_insures_prefix = prices_full[:-1], sum_insures_full[:-1]
+    true_next_item = items_full[-1]
+    length = len(items_prefix)
+
+    baseline = predict_one(model, architecture, items_prefix, ages_prefix, prices_prefix, sum_insures_prefix)
+    baseline_prob_true = baseline["item_probs"][true_next_item].item()
+
+    positions = range(length) if architecture == "encoder" else range(1, length - 1)
+
+    rows = []
+    for i in positions:
+        items_occluded = items_prefix.copy()
+        items_occluded[i] = 0  # PAD id -- zero-embedding AND invisible-as-key, positions untouched
+        occluded = predict_one(model, architecture, items_occluded, ages_prefix, prices_prefix, sum_insures_prefix)
+        rows.append({
+            "distance_from_end": (length - 1) - i,
+            "item_prob_true_delta": baseline_prob_true - occluded["item_probs"][true_next_item].item(),
+            "age_delta": baseline["age"] - occluded["age"],
+            "price_delta": baseline["price"] - occluded["price"],
+            "sum_insure_delta": baseline["sum_insure"] - occluded["sum_insure"],
+        })
+    return pd.DataFrame(rows)</code></pre>
+  </div>
+
+  <p>Sign convention: <code>impact = baseline − occluded</code>. Positive means removing that event <em>hurt</em>
+  the prediction (the event was helping); negative means removing it <em>helped</em> (the event was working
+  against the eventual answer).</p>
+
+  <h2>What running it actually showed</h2>
+  <p>One customer, 7-event prefix (positions 0–6): item <code>2</code> at position 0, then item <code>6</code>
+  repeated at positions 1–5, true next item <code>7</code>:</p>
+  <table class="cmp">
+    <tr><th>Model</th><th>item_prob(true=7)</th><th>predicted item</th><th>age</th><th>price</th><th>sum_insure</th></tr>
+    <tr><td>encoder (concat_all)</td><td>0.138</td><td>4 (wrong)</td><td>62.34</td><td>1,192.02</td><td>130,152.88</td></tr>
+    <tr><td>decoder (concat_all)</td><td>0.192</td><td>4 (wrong)</td><td>61.85</td><td>2,486.21</td><td>96,927.58</td></tr>
+    <tr><td><em>ground truth</em></td><td>—</td><td>7</td><td>62.00</td><td>2,242.15</td><td>80,395.68</td></tr>
+  </table>
+
+  <p>Occluding each of the five repeated "6" events one at a time (decoder, valid range <code>range(1, length-1)
+  = range(1, 6)</code> — position 0 excluded as the causal dead end, position 6 excluded as the read-out itself):</p>
+  <table class="cmp">
+    <tr><th>Position</th><th>item_prob_true_delta</th><th>age_delta</th><th>price_delta</th><th>sum_insure_delta</th></tr>
+    <tr><td>1</td><td>+0.0042</td><td>-0.0138</td><td>+0.75</td><td>+90.86</td></tr>
+    <tr><td>2</td><td>-0.0012</td><td>-0.0059</td><td>-60.92</td><td>-1692.27</td></tr>
+    <tr><td>3</td><td>+0.0024</td><td>+0.0069</td><td>-11.67</td><td>+851.49</td></tr>
+    <tr><td>4</td><td>-0.0025</td><td>+0.0117</td><td>-76.64</td><td>-733.52</td></tr>
+    <tr><td>5</td><td>-0.0019</td><td>-0.0014</td><td>-49.81</td><td>-768.00</td></tr>
+  </table>
+  <p>All five events are the same item id — a good stress test for redundancy. The earliest occurrence (position
+  1) has the largest positive item-probability delta, consistent with "the first occurrence establishes context;
+  later repeats of the same item are increasingly redundant." Age barely moves at all (≤0.014 years) — not because
+  history doesn't matter, but structurally: the decoder's age head computes <code>age_pred = ages_norm +
+  softplus(age_head(x))</code>, where <code>ages_norm</code> at the read-out position is the customer's actual
+  current age taken straight from the input, not from attention — only the small correction term depends on
+  history at all. Price and sum_insure swing in <em>both directions</em> across adjacent same-item events (e.g.
+  position 2: -1692, position 3: +851) — evidence the model tracks each event's actual noisy transaction amount,
+  not just "item type present/absent."</p>
+
+  <h2>Aggregating across 20 customers: the real finding</h2>
+  <p>Running LOEO across 20 test customers and grouping by distance from the read-out position gives a much more
+  reliable picture than any single example:</p>
+  <table class="cmp">
+    <tr><th>Architecture</th><th>abs_item_mean range</th><th>abs_price_mean range</th><th>abs_sum_insure_mean range</th></tr>
+    <tr><td>Encoder (CLS-pooled)</td><td>0.018 – 0.044</td><td>196 – 481</td><td>3,522 – 7,780</td></tr>
+    <tr><td>Decoder (causal, last position)</td><td>0.0023 – 0.0032</td><td>27 – 45</td><td>896 – 1,996</td></tr>
+  </table>
+  <p>Every column, across every distance bucket (most with n=20 customers), the encoder's average |impact| is
+  roughly <strong>10× larger</strong> than the decoder's. That gap is structural, not incidental:</p>
+  <ul>
+    <li><strong>Encoder — single bottleneck.</strong> The whole prefix collapses through bidirectional attention
+    into <em>one</em> CLS vector (<a href="03-cls-and-padding.html">Lesson 3</a>). Every event is a co-equal
+    contributor to that one vector, so removing any one of them measurably changes what it contains.</li>
+    <li><strong>Decoder — distributed by training design.</strong> Shift-by-one supervises <em>every</em> position
+    simultaneously (<a href="16-proving-shift-by-one.html">Lesson 16</a>) — across many epochs the model had to
+    produce a good "predict next" output starting from every possible prefix length, not just the one length we
+    probe here. That pushes it toward encoding history redundantly across positions, so knocking any single one
+    out barely moves the final read-out.</li>
+  </ul>
+  <p>Equally notable: <strong>neither architecture shows a clean recency gradient.</strong> If "the most recent
+  event matters most" were true, |impact| should shrink steadily as distance from the read-out grows. It doesn't —
+  encoder's <code>abs_item_mean</code> bounces around with no monotonic trend across distances 0–6, and decoder's
+  is close to flat across distances 1–5. Importance is spread roughly evenly across a history this short — a real
+  finding about this mock dataset (item category depends mostly on the customer's current age band, which barely
+  changes across a handful of consecutive events), not a failure of the method.</p>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — don't compare raw magnitudes across features</div>
+    <p><code>abs_sum_insure_mean</code> (thousands) will always dwarf <code>abs_price_mean</code> (hundreds) —
+    that's just the underlying scale of the two quantities, not evidence that sum_insure is "more influenced." To
+    compare relative sensitivity across features fairly, divide each by its own baseline predicted value (or its
+    head's MAE) before comparing. Also watch sample size at the tail — buckets with fewer customers (the ones
+    whose history reaches that far back) are noisier than the <code>n=20</code> rows.</p>
+  </div>
+
+  <h2>Where this fits among other attribution methods</h2>
+  <p>Occlusion and LOEO sit inside a much wider family of post-hoc explainability techniques. The table below
+  places them alongside the rest of the landscape — what each one actually does, what it needs access to, roughly
+  how expensive it is, and where it tends to get used in practice:</p>
+  <div style="overflow-x:auto;">
+  <table class="cmp">
+    <tr><th>Method</th><th>How it works</th><th>Access</th><th>Cost</th><th>Scope</th><th>Pros</th><th>Cons</th><th>Best use case</th></tr>
+    <tr><td>Attention Attribution</td><td>Reads attention weights as a proxy for influential events</td><td>Internal (transformer only)</td><td>⭐ Very low</td><td>Local</td><td>Free — already computed; fast; easy to visualize</td><td>Attention ≠ explanation — high attention doesn't guarantee causal importance</td><td>Exploratory analysis, dashboards, debugging</td></tr>
+    <tr><td>Occlusion</td><td>Remove one event, observe the prediction change</td><td>Black-box</td><td>⭐⭐⭐ Medium–high</td><td>Local</td><td>Intuitive, model-agnostic, easy for business users to follow</td><td>One inference per removed event; event interactions can complicate the read</td><td>Customer timelines, insurance event explanations</td></tr>
+    <tr><td>Leave-One-Event-Out (LOEO) <em>(this lesson)</em></td><td>Occlusion applied systematically to every event, one at a time</td><td>Black-box</td><td>⭐⭐⭐ Medium–high</td><td>Local</td><td>Simple, directly measures each event's impact, easy to audit</td><td>Same cost as occlusion; doesn't capture combined effects of multiple events together</td><td>Sequential event data — claims, payments, policy history</td></tr>
+    <tr><td>Integrated Gradients</td><td>Integrates gradients along a path from a baseline input to the real one</td><td>White-box (needs gradients)</td><td>⭐⭐ Medium</td><td>Local</td><td>Strong theoretical grounding, more stable than raw gradients</td><td>Needs a differentiable model and a well-chosen baseline</td><td>Deep learning explainability in production</td></tr>
+    <tr><td>Embedding Perturbation</td><td>Adds small noise to one event's embedding, measures the change</td><td>White-box / embedding access</td><td>⭐⭐ Medium</td><td>Local</td><td>Measures representation sensitivity without deleting anything</td><td>Result depends on the noise scale chosen; harder to explain to non-technical audiences</td><td>Understanding embedding robustness &amp; representation quality</td></tr>
+    <tr><td>Gradient Saliency</td><td>Raw gradient of the output with respect to the input</td><td>White-box</td><td>⭐ Very low</td><td>Local</td><td>Extremely fast and easy to compute</td><td>Often noisy and unstable — less reliable than Integrated Gradients</td><td>Quick debugging during model development</td></tr>
+    <tr><td>SHAP (Kernel/Deep)</td><td>Cooperative-game-theory contribution estimate per feature</td><td>Both, depends on variant</td><td>⭐⭐⭐⭐ High</td><td>Local &amp; global</td><td>Strong theoretical basis, additive, widely recognized by regulators</td><td>Expensive for long sequences; assumes feature independence, which may not hold</td><td>Tabular models and smaller deep learning models</td></tr>
+    <tr><td>LIME</td><td>Fits a simple surrogate model around one prediction</td><td>Black-box</td><td>⭐⭐⭐ Medium</td><td>Local</td><td>Works with almost any model, easy to understand</td><td>Results vary run-to-run; depends on the perturbation strategy chosen</td><td>Rapid prototyping and local explanations</td></tr>
+    <tr><td>Counterfactual Explanations</td><td>Finds the smallest input change that flips the prediction</td><td>Black-box / optimization</td><td>⭐⭐⭐⭐ High</td><td>Local</td><td>Intuitive ("what needs to change?"), actionable for business users</td><td>Can be expensive; may produce unrealistic scenarios without constraints</td><td>Customer interventions, underwriting, retention strategies</td></tr>
+  </table>
+  </div>
+  <p>Occlusion/LOEO was the right starting point for this repo specifically: it needs no extra library, reuses the
+  existing masking convention exactly, and produces numbers ("removing this event changed the prediction by X")
+  that are directly explainable to a non-technical stakeholder — a real advantage in a regulated domain like
+  insurance. SHAP, LIME, and counterfactuals are the natural next step if this ever needed to satisfy formal model
+  governance or regulatory review — they cost more to compute but carry stronger theoretical guarantees and, in
+  SHAP's case, wider recognition from regulators.</p>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Post-hoc explainability</dt>
+    <dd>Explaining a specific prediction from an already-trained, frozen model — as opposed to anything about how
+    the model is built or trained.</dd>
+
+    <dt>Occlusion</dt>
+    <dd>Blank out part of the input, re-run the model, measure how much the output changes. Large change = that
+    part mattered; near-zero change = it didn't.</dd>
+
+    <dt>Leave-One-Event-Out (LOEO)</dt>
+    <dd>Occlusion applied systematically, one sequence position at a time, producing one importance score per
+    event in a customer's history.</dd>
+
+    <dt>Mask-in-place occlusion</dt>
+    <dd>Occluding an event by marking it PAD (rather than deleting and reindexing) — removes its informational
+    contribution while leaving every other token's position and rotary encoding untouched.</dd>
+
+    <dt>Degenerate attention row</dt>
+    <dd>A query position whose every legal key has been masked, producing an all-<code>-inf</code> score row —
+    <code>softmax</code> of that is <code>NaN</code>, and it propagates to other positions through
+    <code>0 × NaN = NaN</code>, not through any nonzero attention weight.</dd>
+
+    <dt>Bottleneck vs. distributed representation</dt>
+    <dd>A bottleneck (like CLS pooling) forces all information through one vector, making it sensitive to any
+    single input changing. A distributed representation (like a decoder trained with per-position supervision at
+    every prefix length) spreads redundant signal across positions, making any one position less individually
+    load-bearing.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Occlusion = remove part of the input and measure the prediction change; LOEO = occlusion looped over every event in a sequence.</li>
+    <li>Never delete-and-reindex under RoPE — it changes information content and position simultaneously. Mask-in-place (set the occluded event's id to the PAD id, reuse it as the mask source) changes only information content.</li>
+    <li>Two positions are structurally un-occludable this way: the read-out position itself, and — for causal decoders only — position 0, which has no attention fallback if masked (produces NaN that spreads via <code>0 × NaN</code>, not a code bug).</li>
+    <li>Encoder's CLS bottleneck showed ~10× larger occlusion sensitivity than the decoder's distributed, every-position-supervised representation — a robust, architecture-level finding across 20 test customers.</li>
+    <li>Neither architecture showed a strong recency effect in this dataset — importance was roughly flat across position, itself a real finding worth noting rather than assuming recency always dominates.</li>
+    <li>Don't compare attribution magnitudes across features with different natural scales without normalizing first.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="16-proving-shift-by-one.html"><span class="dir">Back</span>Lesson 16 — Proving Shift-by-One</a>
+    <a class="next" href="18-linear-probing.html"><span class="dir">Next</span>Lesson 18 — Linear Probing</a>
+  </div>
+</main>
+</body>
+</html>

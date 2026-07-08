@@ -29,6 +29,9 @@
       <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
       <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
       <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
     </nav>
   </div>
 </header>
@@ -37,11 +40,13 @@
   <p class="eyebrow">Study Curriculum</p>
   <h1>A Study on Transformer</h1>
   <p class="subtitle">Understanding transformer architecture inside out — not as a language model, but as a general
-  sequence-processing pattern applied to insurance customer data. Sixteen lessons, most grounded in the actual
+  sequence-processing pattern applied to insurance customer data. Nineteen lessons, most grounded in the actual
   code in this repo, covering two examples of the pattern applied outside insurance/NLP entirely, a multi-task
   extension of the encoder project, the real-world model (BERT) behind the CLS trick studied along the way, loss
   functions beyond plain MSE, how to read — and act on — whether any of it actually worked, where a target value
-  actually comes from, and a runnable proof of the guarantee that makes shift-by-one work at all.</p>
+  actually comes from, a runnable proof of the guarantee that makes shift-by-one work at all, and finally three
+  ways to interrogate a model after it's already trained — which events drove one prediction, how much
+  information its representation actually holds, and what that representation visually looks like.</p>
 
   <h2>How to use this</h2>
   <p>Read the lessons in order the first time — each one builds on the last. After that, use the pill nav above
@@ -113,6 +118,14 @@
       <div class="stack-arrow">↓</div>
       <div class="stack-box">Lesson 16 — Proving Shift-by-One<span class="sub">a runnable script proving one pass equals every enumerated prefix, not approximately</span></div>
     </div>
+    <div style="text-align:center; margin: 6px 0; color: var(--text-dim); font-size: 0.85rem;">↓ once a model is trained, interrogating it is a separate skill from building it ↓</div>
+    <div class="stack">
+      <div class="stack-box">Lesson 17 — Event Attribution<span class="sub">occlusion &amp; LOEO — which past events actually drove this one prediction, run on both Lesson 6's decoder and Lesson 7's encoder</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 18 — Linear Probing<span class="sub">forget one prediction — is this attribute linearly recoverable from the representation at all?</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 19 — Visualizing Representations<span class="sub">UMAP on item embeddings and pooled customer vectors — mostly confirms Lessons 17 &amp; 18, once catches something they didn't</span></div>
+    </div>
   </div>
 
   <h2>Lessons</h2>
@@ -144,6 +157,9 @@
     <tr><td>14</td><td><a href="14-baselines-and-checkpointing.html">Baselines &amp; Checkpointing</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>How do you actually compute "the best possible score," and actually keep the best model you trained?</td></tr>
     <tr><td>15</td><td><a href="15-explicit-vs-derived-targets.html">Explicit vs Derived Targets</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>Does your target already exist as its own value, or is it a slice of something you already have?</td></tr>
     <tr><td>16</td><td><a href="16-proving-shift-by-one.html">Proving Shift-by-One</a></td><td><span class="arch-badge dec inline"><span class="dot"></span>Decoder-only</span></td><td>Does enumerating every prefix separately actually give you more to learn from than one shift-by-one pass?</td></tr>
+    <tr><td>17</td><td><a href="17-event-attribution.html">Event Attribution</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>The model just predicted X for this customer — which of their past events actually caused it?</td></tr>
+    <tr><td>18</td><td><a href="18-linear-probing.html">Linear Probing</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>Forget one prediction — does the representation linearly contain this attribute at all?</td></tr>
+    <tr><td>19</td><td><a href="19-visualizing-representations.html">Visualizing Representations</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>What do Lessons 17 &amp; 18's findings actually look like — and does looking catch anything new?</td></tr>
   </table>
 
   <h2>Repo map</h2>
@@ -163,6 +179,9 @@
       <li>lesson 14 (Baselines &amp; Checkpointing) also has no source file — its baseline code references <code>sample_category()</code>/<code>ITEM_IDS_BY_CAT</code> from the same mock-data pattern used in lessons 6, 7, and 10</li>
       <li>lesson 15 (Explicit vs Derived Targets) is grounded directly in <code>train_insurance.py</code> (lesson 6) and <code>train_insurance_representation_for_claim.py</code> (lesson 7) — no new file, just a contrast between two already-studied ones</li>
       <li>lesson 16 (Proving Shift-by-One) runs <code>package/gpt_decoder_block.py</code>'s <code>GPTDecoderBlock</code> directly — the only lesson with a script meant to be executed and checked, not just read</li>
+      <li>lesson 17 (Event Attribution) is grounded in <code>sequences_to_multiple_outcomes.ipynb</code> — a separate side-project notebook (2 architectures × 3 fusion strategies), not one of the three <code>train_insurance*.py</code> entry points</li>
+      <li>lesson 18 (Linear Probing) is grounded in the same <code>sequences_to_multiple_outcomes.ipynb</code> as lesson 17 — its probing code sits right alongside the LOEO cells, reusing the same 6 saved checkpoints</li>
+      <li>lesson 19 (Visualizing Representations) is grounded in the same notebook again, plus <code>main.py</code> for the repo's other precedent of UMAP usage (on contrastive embeddings, a different target than this lesson's item-embedding and pooled-representation plots)</li>
     </ul>
   </div>
 

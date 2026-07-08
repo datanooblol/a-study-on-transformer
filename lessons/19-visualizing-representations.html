@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 19 — Visualizing Representations: What UMAP Confirms (and Reveals)</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill current" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 19 of 19</p>
+  <h1>Visualizing Representations: What UMAP Confirms (and Reveals)</h1>
+  <p class="subtitle">Lesson 17 gave us attribution deltas. Lesson 18 gave us R² and accuracy numbers. Both are
+  correct and both are also easy to misread in the abstract. This lesson puts the same questions in front of your
+  eyes instead: does the item embedding table group products the way the insurance catalog says it should? Does a
+  customer's pooled representation actually look like it encodes age, the way Lesson 18's R²=0.70–0.95 claims?
+  Visualizing mostly confirms what the numbers already said — except once, where it caught something the numbers
+  alone didn't.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge multi"><span class="dot"></span>Both architectures — this lesson's examples use the encoder/concat_all config throughout</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this one</span>
+    <ul>
+      <li><code>sequences_to_multiple_outcomes.ipynb</code> — same notebook as Lessons 17 &amp; 18; this lesson's code sits right after the linear-probing cells</li>
+      <li><code>main.py</code> — the repo's other UMAP usage (contrastive embeddings), same library, different target</li>
+      <li><a href="18-linear-probing.html">Lesson 18</a> — the R²/accuracy numbers this lesson visually checks</li>
+    </ul>
+  </div>
+
+  <h2>Three different things worth visualizing — and why they're not the same question</h2>
+  <table class="cmp">
+    <tr><th>What's plotted</th><th>What determines its shape</th><th>Is the shape a real discovery?</th></tr>
+    <tr><td>Item embedding table</td><td>An unconstrained, freely learned lookup table (<code>nn.Embedding</code>)</td><td>Yes — nothing forces any particular structure; whatever shows up is genuinely learned</td></tr>
+    <tr><td>Age / price / sum_insure projections</td><td>A single <code>nn.Linear(1, d_model)</code> per feature</td><td>No — this is provably a straight line in <code>d_model</code>-dim space by construction; only direction and spread are learned, not "shape"</td></tr>
+    <tr><td>Pooled customer representation</td><td>Fusion + attention across an entire history (<a href="03-cls-and-padding.html">Lesson 3</a>)</td><td>Partially — Lesson 18 already gave us numeric predictions (R²/accuracy) to check the picture against</td></tr>
+  </table>
+
+  <h2>1. Item embedding table — does the model group products by insurance category?</h2>
+  <p>The catalog groups 8 products into 5 categories (Term, WholeLife, Endowment, ILP, CriticalIllness). Nothing
+  during training ever tells the model this grouping directly — if it shows up in the embedding geometry, it's
+  because gradient descent found it useful, not because it was told to.</p>
+
+  <div class="code-block">
+    <div class="file-tag">sequences_to_multiple_outcomes.ipynb (excerpt)</div>
+    <pre><code>import umap
+
+def get_item_embeddings(model):
+    return model.backbone.fusion.categorical_embs[0].weight.detach().numpy()  # (num_items+1, d_model)
+
+item_emb = get_item_embeddings(enc_model)
+item_ids = list(range(1, num_items + 1))  # skip index 0 (padding)
+item_vectors = item_emb[item_ids]
+
+# only 8 points -- UMAP's neighbor graph isn't very meaningful at this scale;
+# treat this as illustrative, not statistically rigorous
+reducer = umap.UMAP(n_neighbors=4, random_state=55)
+item_umap = reducer.fit_transform(item_vectors)</code></pre>
+  </div>
+
+  <p><strong>Result:</strong> only one of the three multi-item categories clustered the way the catalog predicts.</p>
+  <table class="cmp">
+    <tr><th>Category pair</th><th>Distance in UMAP space</th><th>Clustered?</th></tr>
+    <tr><td>WholeLife — LegacyGold / Prestige</td><td>≈0.9</td><td>Yes, clearly</td></tr>
+    <tr><td>Endowment — WealthBuilder / SavingsPlan</td><td>≈1.9</td><td>No</td></tr>
+    <tr><td>Term — SmartTerm 20 / Term100 Protect</td><td>≈2.0</td><td>No</td></tr>
+  </table>
+  <p>Strikingly, <code>SmartTerm 20</code> sits <em>closer</em> to <code>WealthBuilder Endowment</code> (distance
+  ≈0.8, a different category entirely) than to its own category-mate <code>Term100 Protect</code>. With only 8
+  points this isn't statistically strong evidence, but it's a real, specific, checkable pattern — not "no
+  structure," but "not the catalog's structure."</p>
+
+  <div class="callout good">
+    <div class="callout-title">✓ Pattern worth reusing — this ties directly back to Lesson 18's numbers</div>
+    <p>Item accuracy sat at chance level (~13–17%, vs. ~12.5% chance for 8 classes) for <em>every</em> config in
+    Lesson 18. A model that barely learned to distinguish next-item identity at all shouldn't be expected to have
+    organized its item embeddings around a clean semantic axis either — both observations point at the same
+    underlying fact instead of being two unrelated coincidences. Cross-checking a probing result against an
+    embedding visualization like this is a good habit generally: consistent stories across two independent methods
+    are much more trustworthy than either alone.</p>
+  </div>
+
+  <h2>2. Age / price / sum_insure projections — confirming the straight-line prediction</h2>
+  <p>Each continuous feature goes through exactly one <code>nn.Linear(1, d_model)</code> — a scalar times a fixed
+  direction vector, plus a constant offset. That is mathematically a single straight line through
+  <code>d_model</code>-dimensional space, for <em>any</em> trained weights. There's no "shape" left to discover —
+  only which direction the model picked, and how spread out along it the real value range ends up.</p>
+
+  <div class="code-block">
+    <div class="file-tag">sequences_to_multiple_outcomes.ipynb (excerpt)</div>
+    <pre><code>def sweep_continuous_projection(model, proj_index, values_norm):
+    proj = model.backbone.fusion.continuous_projs[proj_index]
+    x = torch.tensor(values_norm, dtype=torch.float).unsqueeze(-1)
+    with torch.no_grad():
+        return proj(x).numpy()
+
+sweep_norm = np.linspace(-3, 3, 100)  # normalized units, ~full realistic range
+age_vectors = sweep_continuous_projection(enc_model, 0, sweep_norm)
+# ...same for price (index 1) and sum_insure (index 2)
+
+from sklearn.decomposition import PCA
+pca = PCA(n_components=2).fit(age_vectors)
+print(pca.explained_variance_ratio_[0])  # expect ~1.0 -- confirms the single-line prediction</code></pre>
+  </div>
+
+  <p><strong>Result:</strong> all three swept projections, once run through UMAP, showed a smooth, continuously
+  ordered curve — color transitioning cleanly from low to high value along one connected path, never scrambled or
+  jumping around. That's exactly the confirmatory result the straight-line argument predicts. It's worth
+  restating why this is confirmatory rather than novel: if the sweep had come out jumbled instead, <em>that</em>
+  would have signaled a bug in the extraction code, not a discovery — the math guarantees the line before you ever
+  run anything.</p>
+
+  <h2>3. Customer-level representation — the one with real numbers to check against</h2>
+  <p>This reuses Lesson 18's own <code>build_probe_dataset</code> directly, pointed at UMAP instead of a linear
+  probe — same pooled vectors, same targets, different tool:</p>
+
+  <div class="code-block">
+    <div class="file-tag">sequences_to_multiple_outcomes.ipynb (excerpt)</div>
+    <pre><code>X_customers, y_item, y_age, y_price, y_sum_insure = build_probe_dataset(enc_model, "encoder", probe_customers)
+customer_umap = umap.UMAP(random_state=55).fit_transform(X_customers)
+
+customer_df = pd.DataFrame({
+    "umap_x": customer_umap[:, 0], "umap_y": customer_umap[:, 1],
+    "item": y_item.astype(str), "age": y_age, "price": y_price, "sum_insure": y_sum_insure,
+})</code></pre>
+  </div>
+
+  <p>Four colorings of the same scatter, checked against Lesson 18's numbers for this exact config
+  (encoder/concat_all):</p>
+  <table class="cmp">
+    <tr><th>Colored by</th><th>Lesson 18 prediction</th><th>What the plot showed</th><th>Match?</th></tr>
+    <tr><td>Item</td><td>Near chance accuracy (≈0.13)</td><td>Colors thoroughly interleaved, no visible clustering by item id</td><td>Yes</td></tr>
+    <tr><td>Age</td><td>R² ≈ 0.70</td><td>Clear diagonal gradient, dark (young) to bright (old), some intermixing</td><td>Yes</td></tr>
+    <tr><td>Price</td><td>R² ≈ 0.18 (this config)</td><td>Almost entirely one dark color, plus 2–3 extreme bright outliers</td><td>Ambiguous at first — see below</td></tr>
+    <tr><td>Sum_insure</td><td>R² ≈ 0.10</td><td>Mostly dark, but a genuine scatter of mid-tone (teal/green) points beyond the outliers</td><td>Yes — a real intermediate case</td></tr>
+  </table>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / gotcha — a color scale can manufacture "no signal"</div>
+    <p>The price plot's near-uniform dark color was ambiguous: with only 1–2 extreme high-price customers, a
+    continuous color scale auto-ranges to fit them, compressing every other point into a narrow dark band — even
+    if a real, weaker gradient existed among the non-outlier customers, this coloring would hide it entirely.
+    Re-plotting with <code>color=np.log1p(price)</code> resolved this cleanly: the log scale revealed noticeably
+    <em>more</em> color diversity across the plot (confirming real dynamic range had been hidden), but that
+    diversity still didn't organize into a spatial trend the way age's did. That settles it two ways at once — the
+    original flat-color read wasn't purely a plotting artifact, and price genuinely carries much weaker spatial
+    structure than age, now checked on a fair scale instead of an outlier-compressed one.</p>
+  </div>
+
+  <h2>What visualization actually added beyond the numbers</h2>
+  <p>Worth being honest about which parts of this lesson taught something new and which just built confidence in
+  what was already known:</p>
+  <ul>
+    <li><strong>New information</strong>: the item-embedding/category mismatch. Lesson 18 only tested whether the
+    <em>next item id</em> was decodable — it never asked whether the embedding table's internal geometry respects
+    the catalog's category labels. That's a genuinely different question, and the answer ("only partially")
+    wasn't visible in any R² or accuracy number.</li>
+    <li><strong>Confirmation, not new information</strong>: the customer-representation plots mostly reproduced
+    what Lesson 18's R²/accuracy numbers already implied. Useful for building trust that the numbers mean what you
+    think they mean — but not a new discovery on their own.</li>
+    <li><strong>A transferable methodological lesson</strong>: the color-scale-outlier trap applies to any
+    continuous-color visualization, not just this dataset — always sanity-check an apparently "flat" color plot
+    with a log scale or percentile-clipped range before concluding there's no signal.</li>
+  </ul>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Confirmatory vs. exploratory visualization</dt>
+    <dd>A confirmatory plot checks a prediction you already have a numeric answer for (like the customer
+    representation plots here); an exploratory plot asks a question you don't have another answer to yet (like the
+    item embedding table here). Both are useful, but only the second can genuinely surprise you.</dd>
+
+    <dt>Color-scale compression</dt>
+    <dd>When a small number of extreme values stretch a continuous color scale, visually flattening every other
+    point into one indistinct band — checked by re-plotting with a log transform or a percentile-clipped color
+    range before concluding "no signal" from a plot.</dd>
+
+    <dt>Provable vs. empirical structure</dt>
+    <dd>Some representations (a single <code>nn.Linear(1, d_model)</code> projection) have a shape that's
+    mathematically guaranteed regardless of training — visualizing them is a sanity check, not a discovery. Others
+    (a freely learned embedding table) have no such guarantee — visualizing them is a genuine empirical question.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Know which kind of representation you're plotting before you interpret its shape — a learned lookup table's structure is a real finding; a single linear projection's structure is guaranteed by construction and only confirms what you already knew.</li>
+    <li>The item embedding table only weakly reflected the catalog's category structure (1 of 3 multi-item categories clustered cleanly) — consistent with, and explained by, Lesson 18's near-chance item accuracy.</li>
+    <li>Age, price, and sum_insure projections all showed the predicted smooth, ordered 1D curve — a confirmatory result, not a new one.</li>
+    <li>The customer-representation UMAP visually reproduced Lesson 18's R²/accuracy pattern almost exactly: clear gradient for age, scrambled for item, weak for price/sum_insure.</li>
+    <li>Before concluding "no signal" from a flat-looking continuous color plot, re-check with a log scale or percentile-clipped color range — a few outliers can visually erase real, weaker structure.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="18-linear-probing.html"><span class="dir">Back</span>Lesson 18 — Linear Probing</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

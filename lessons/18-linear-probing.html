@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 18 — Linear Probing: How Much Information Is Actually There?</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill current" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 18 of 19</p>
+  <h1>Linear Probing: How Much Information Is Actually There?</h1>
+  <p class="subtitle">Lesson 17 asked which past events drove one specific prediction. This lesson asks a
+  different question: forget any specific prediction — does the model's pooled representation contain enough
+  information to recover a customer's next item, age, price, or sum insured <em>at all</em>, using nothing but a
+  plain linear model trained on the frozen representation? If a deliberately weak reader can already decode
+  something, that's strong evidence it's genuinely, simply present — not entangled somewhere only the original
+  trained head can reach.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge multi"><span class="dot"></span>Both architectures, all 3 fusion strategies — 6 configs probed and compared</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this one</span>
+    <ul>
+      <li><code>sequences_to_multiple_outcomes.ipynb</code> — same notebook as <a href="17-event-attribution.html">Lesson 17</a>; this lesson's code lives right alongside the LOEO cells</li>
+      <li><a href="03-cls-and-padding.html">Lesson 3</a> — the CLS-pooling mechanism whose output this lesson probes directly</li>
+      <li><a href="17-event-attribution.html">Lesson 17</a> — the complementary question (which events, not how much information)</li>
+    </ul>
+  </div>
+
+  <h2>The question this lesson answers</h2>
+  <p>A trained model has an <code>item_head</code>, an <code>age_head</code>, a <code>price_head</code>, and a
+  <code>sum_insure_head</code>, each a small <code>nn.Linear</code> sitting on top of the shared backbone
+  representation (<a href="10-multi-task-encoder.html">Lesson 10</a>). Those heads were trained end-to-end with
+  the backbone, so their accuracy tells you what the <em>whole system</em> achieved together. It doesn't tell you
+  whether the backbone's representation, on its own, already contained that information in an easily-readable
+  form — or whether the head had to do serious nonlinear work to dig it out. Freezing the backbone and training a
+  brand new, deliberately simple probe on top answers exactly that.</p>
+
+  <h2>What "linear probing" means, and why weak is the point</h2>
+  <p><strong>Linear probing</strong>: take a trained, frozen backbone (no more gradient updates to it), run it on a
+  batch of examples to get pooled representation vectors, then fit a plain linear model (logistic regression for a
+  category, ridge regression for a number) on those frozen vectors against some attribute you care about. Nothing
+  about the backbone changes — the probe is trained entirely separately, after the fact.</p>
+  <p>The choice to use a <em>linear</em> probe, specifically, is deliberate. A linear model is about the weakest
+  possible reader you could use — it can only recover information that's already sitting in the representation in
+  a simple, roughly-additive form. If even a linear probe decodes something well, that's evidence the information
+  is genuinely, cleanly present — the result isn't an artifact of the probe being clever, because a linear probe
+  isn't capable of being clever. If a linear probe fails, the information might still be in there, just tangled up
+  in a way only a nonlinear reader (like the original trained head) can unpack.</p>
+
+  <div class="diagram">
+    <div class="stack">
+      <div class="stack-box">Raw customer history<span class="sub">items, ages, prices, sum_insures</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">Trained backbone (frozen)<span class="sub">model.backbone(...) — no more updates from here on</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Pooled representation<span class="sub">one vector per customer — CLS for encoder, last position for decoder</span></div>
+    </div>
+    <div class="flow" style="margin: 10px 0 4px;">
+      <div class="flow-box accent"><span class="t">Existing trained heads</span><span class="s">nonlinear-ish, trained jointly with backbone</span></div>
+      <div class="flow-box accent"><span class="t">New linear probe</span><span class="s">plain LogisticRegression / Ridge, trained after the fact</span></div>
+    </div>
+    <p class="diagram-caption">Same frozen input vector, two different readers — compare what each one can recover.</p>
+  </div>
+
+  <h2>Getting the representation before the heads touch it</h2>
+  <p><code>model.backbone(...)</code> is directly callable on both <code>MultiTaskModel</code> and
+  <code>MultiTaskDecoderModel</code> — no need to hack apart <code>forward()</code>. For the encoder this returns
+  the CLS-pooled <code>summary</code> vector directly, shape <code>(batch, d_model)</code>. For the decoder it
+  returns the full per-position output, shape <code>(batch, seq_len, d_model)</code> — so we index the same
+  last-real-position read-out used everywhere since <a href="16-proving-shift-by-one.html">Lesson 16</a> and
+  <a href="17-event-attribution.html">Lesson 17</a>.</p>
+
+  <div class="code-block">
+    <div class="file-tag">sequences_to_multiple_outcomes.ipynb (excerpt)</div>
+    <pre><code>def extract_representation(model, architecture, items_list, ages_list, prices_list, sum_insures_list):
+    length = len(items_list)
+    items_t = torch.tensor(pad(items_list, MAX_EVENTS), dtype=torch.long).unsqueeze(0)
+    ages_t = torch.tensor(pad(ages_list, MAX_EVENTS, 0.0), dtype=torch.float).unsqueeze(0).unsqueeze(-1)
+    prices_t = torch.tensor(pad(prices_list, MAX_EVENTS, 0.0), dtype=torch.float).unsqueeze(0).unsqueeze(-1)
+    sum_insures_t = torch.tensor(pad(sum_insures_list, MAX_EVENTS, 0.0), dtype=torch.float).unsqueeze(0).unsqueeze(-1)
+
+    ages_norm = age_normalizer.transform(ages_t)
+    prices_norm = price_normalizer.transform(prices_t)
+    sum_insures_norm = sum_insure_normalizer.transform(sum_insures_t)
+
+    with torch.no_grad():
+        rep = model.backbone([items_t], [ages_norm, prices_norm, sum_insures_norm], pad_mask_source=items_t)
+
+    if architecture == "decoder":
+        rep = rep[:, length - 1]  # same read-out position as Lessons 16 and 17
+
+    return rep.squeeze(0).numpy()</code></pre>
+  </div>
+
+  <div class="callout good">
+    <div class="callout-title">✓ Pattern worth reusing</div>
+    <p>Reusing <code>model.backbone</code> directly, instead of adding a flag to <code>forward()</code> or
+    re-implementing the fusion+attention stack, keeps this probing code completely decoupled from the training
+    code — it can't accidentally drift out of sync with how the model actually computes its representation.</p>
+  </div>
+
+  <h2>Building a fair probe dataset</h2>
+  <p>The probe reuses the exact same "prefix predicts the next event" framing the models were originally trained
+  on — <code>items_full[:-1]</code> as input, <code>items_full[-1]</code> (and the matching age/price/sum_insure)
+  as the target. That's what makes the probe's score directly comparable to the trained head's own score on the
+  same task, rather than measuring something subtly different.</p>
+
+  <div class="code-block">
+    <div class="file-tag">sequences_to_multiple_outcomes.ipynb (excerpt)</div>
+    <pre><code>def build_probe_dataset(model, architecture, customers):
+    X, y_item, y_age, y_price, y_sum_insure = [], [], [], [], []
+    for customer_idx, items_full, ages_full, prices_full, sum_insures_full in customers:
+        items_prefix, ages_prefix = items_full[:-1], ages_full[:-1]
+        prices_prefix, sum_insures_prefix = prices_full[:-1], sum_insures_full[:-1]
+        rep = extract_representation(model, architecture, items_prefix, ages_prefix, prices_prefix, sum_insures_prefix)
+        X.append(rep)
+        y_item.append(items_full[-1])
+        y_age.append(ages_full[-1])
+        y_price.append(prices_full[-1])
+        y_sum_insure.append(sum_insures_full[-1])
+    return np.array(X), np.array(y_item), np.array(y_age), np.array(y_price), np.array(y_sum_insure)</code></pre>
+  </div>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — the probe needs its own held-out split</div>
+    <p>None of this repo's <code>train_insurance*.py</code> scripts hold out a validation split for the
+    <em>model</em> (<a href="08-validation-and-deployment.html">Lesson 8</a>'s still-open gap). This side notebook
+    already fixed that for model training (<code>train_set</code>/<code>val_set</code>/<code>test_set</code>). But
+    the probe is a second, separately-trained model — it needs its own train/test split too, or its reported
+    accuracy would just be memorization. <code>sklearn.model_selection.train_test_split</code> on the extracted
+    representations handles this below.</p>
+  </div>
+
+  <div class="code-block">
+    <div class="file-tag">sequences_to_multiple_outcomes.ipynb (excerpt)</div>
+    <pre><code>from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, r2_score
+
+def run_linear_probes(model, architecture, customers, seed=55):
+    X, y_item, y_age, y_price, y_sum_insure = build_probe_dataset(model, architecture, customers)
+    (X_train, X_test, item_train, item_test, age_train, age_test,
+     price_train, price_test, si_train, si_test) = train_test_split(
+        X, y_item, y_age, y_price, y_sum_insure, test_size=0.3, random_state=seed
+    )
+
+    item_probe = LogisticRegression(max_iter=1000).fit(X_train, item_train)
+    age_probe = Ridge().fit(X_train, age_train)
+    price_probe = Ridge().fit(X_train, price_train)
+    si_probe = Ridge().fit(X_train, si_train)
+
+    return {
+        "item_acc": accuracy_score(item_test, item_probe.predict(X_test)),
+        "age_r2": r2_score(age_test, age_probe.predict(X_test)),
+        "price_r2": r2_score(price_test, price_probe.predict(X_test)),
+        "sum_insure_r2": r2_score(si_test, si_probe.predict(X_test)),
+        "n_train": len(X_train), "n_test": len(X_test),
+    }</code></pre>
+  </div>
+
+  <h2>What running it across all 6 configs actually showed</h2>
+  <table class="cmp">
+    <tr><th>Architecture</th><th>Fusion</th><th>item_acc</th><th>age_r2</th><th>price_r2</th><th>sum_insure_r2</th><th>n_train / n_test</th></tr>
+    <tr><td>decoder</td><td>concat_all</td><td>0.130</td><td>0.955</td><td>-1.146</td><td>0.320</td><td>52 / 23</td></tr>
+    <tr><td>decoder</td><td>concat_emb_summed</td><td>0.174</td><td>0.935</td><td>-0.945</td><td>0.202</td><td>52 / 23</td></tr>
+    <tr><td>decoder</td><td>sum</td><td>0.087</td><td>0.934</td><td>-0.068</td><td>0.040</td><td>52 / 23</td></tr>
+    <tr><td>encoder</td><td>concat_all</td><td>0.130</td><td>0.705</td><td>0.180</td><td>0.096</td><td>52 / 23</td></tr>
+    <tr><td>encoder</td><td>concat_emb_summed</td><td>0.087</td><td>0.794</td><td>-0.066</td><td>0.305</td><td>52 / 23</td></tr>
+    <tr><td>encoder</td><td>sum</td><td>0.174</td><td>0.835</td><td>-1.042</td><td>0.183</td><td>52 / 23</td></tr>
+  </table>
+
+  <p><strong>Age is dramatically more linearly decodable than everything else</strong> — R² of 0.70–0.95, far
+  above every other column. This is a genuine finding about the backbone itself, not a repeat of the age-head
+  passthrough trick from Lesson 17 (<code>age_pred = ages_norm + softplus(...)</code> only happens later, inside
+  <code>MultiTaskModel.forward</code>/<code>MultiTaskDecoderModel.forward</code>, strictly after
+  <code>backbone(...)</code> returns — the probe never sees that passthrough input). The likely reason: age is
+  smooth, roughly monotonic, and injected through a single linear projection per event with no per-transaction
+  noise, so it dominates the pooled vector's variance and survives the fusion + attention pipeline almost
+  perfectly intact.</p>
+
+  <p><strong>Item accuracy sits right around chance level everywhere</strong> (0.087–0.174). With 8 real item
+  categories, chance is ~12.5%. All 6 probes land close to that line — and so did the trained heads themselves on
+  this same task (encoder/<code>concat_all</code>'s own head hit 0.207, decoder/<code>concat_all</code>'s hit
+  0.174, from the freshly-reloaded checkpoint metrics). That's a more useful finding than "which fusion strategy
+  wins at item prediction": next-item prediction may be close to intrinsically hard for this mock dataset, not
+  primarily an architecture or fusion-strategy shortfall.</p>
+
+  <p><strong>Price R² is negative in 4 of 6 rows</strong> — the probe does <em>worse</em> than just predicting the
+  mean price for every customer. Two things likely compound this: price carries real per-transaction lognormal
+  noise on top of a category-based base amount (a genuine noise floor no probe can beat), and <code>n_train=52</code>
+  against a 32-dimensional input is a thin ratio for <code>Ridge</code> at default regularization — small-sample
+  overfitting alone can push R² negative.</p>
+
+  <p><strong>Sum_insure is weak-but-consistently-positive</strong> (0.04–0.32), a notch better than price in
+  nearly every row — plausibly because sum insured correlates more with <em>which item/policy type</em> was
+  purchased (something the representation clearly encodes, per Lesson 17's findings), whereas price carries more
+  idiosyncratic per-transaction noise on top of that.</p>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — what a negative R² actually means</div>
+    <p><code>R²</code> (coefficient of determination) compares a model's predictions to the simplest possible
+    baseline: always predicting the training mean. <code>R² = 1</code> is a perfect fit, <code>R² = 0</code> means
+    "no better than guessing the mean," and <code>R² &lt; 0</code> means the fitted model is actively worse than
+    that trivial baseline — a real signal that no reliable linear structure was recovered, not just "a weak
+    positive correlation."</p>
+  </div>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — don't over-read the fusion-strategy rankings</div>
+    <p>With <code>n_test=23</code>, precise differences between fusion strategies for the same feature (e.g.
+    encoder <code>concat_all</code> price_r2 = 0.18 vs. encoder <code>sum</code> = -1.04) are well within what 23
+    samples can produce from noise alone — don't treat them as a real ranking. The <em>cross-feature</em> pattern
+    (age ≫ sum_insure &gt; item ≈ price, price often below the mean-baseline) is the trustworthy part of this
+    table; the cross-fusion-strategy comparisons within one feature are not, at this sample size.</p>
+  </div>
+
+  <h2>Probe vs. trained head — what the comparison actually tells you</h2>
+  <p>If a frozen linear probe's score is close to the trained head's own score on the same task, the head isn't
+  adding much beyond a simple linear read-out — most of the achievable signal was already sitting in the
+  representation in an easily accessible form. If the probe scores much lower than the head, the head is doing
+  real nonlinear work the probe structurally cannot reach.</p>
+  <table class="cmp">
+    <tr><th>Config</th><th>Trained head item_acc</th><th>Linear probe item_acc</th><th>Gap</th></tr>
+    <tr><td>encoder / concat_all</td><td>0.207</td><td>0.130</td><td>head ahead, not dramatically</td></tr>
+    <tr><td>decoder / concat_all</td><td>0.174</td><td>0.130</td><td>head ahead, not dramatically</td></tr>
+  </table>
+  <p>In both spot-checked configs, the trained head modestly outperforms the plain linear probe — some real
+  nonlinear extraction is happening, but the gap isn't large. Most of what the head achieves was already
+  linearly present in the frozen representation.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — use each checkpoint's own metrics, not the CSV</div>
+    <p><code>experiment_summary.csv</code> in this notebook was generated from an earlier kernel run with a
+    different random mock dataset (<code>generate_dataset()</code> in cell 16 isn't reseeded independently of the
+    one-time <code>random.seed(55)</code> call several cells above it — re-running that cell alone silently
+    produces different data). The two rows compared above use each checkpoint's own freshly-saved
+    <code>best_metrics</code>, captured at save time alongside the weights themselves — the only numbers
+    guaranteed to be self-consistent with what's actually loaded.</p>
+  </div>
+
+  <h2>How this complements Lesson 17</h2>
+  <table class="cmp">
+    <tr><th></th><th>Lesson 17 — Occlusion / LOEO</th><th>Lesson 18 — Linear Probing</th></tr>
+    <tr><td>Question</td><td>Which past events drove <em>this one</em> prediction?</td><td>Is this attribute linearly recoverable from the representation at all?</td></tr>
+    <tr><td>Depends on</td><td>What the trained heads currently use</td><td>What the backbone representation contains, regardless of whether any head currently uses it</td></tr>
+    <tr><td>Can miss</td><td>Information the representation holds but no head learned to read</td><td>Information that's present only in an entangled, nonlinear form</td></tr>
+  </table>
+  <p>A representation could, in principle, linearly encode something a trained head never learned to use (a
+  wasted opportunity LOEO alone would never surface, since LOEO can only measure impact on predictions the model
+  actually makes) — or vice versa, hold information only in a tangled nonlinear form no linear probe can reach,
+  even though the trained head clearly benefits from it. Running both gives a fuller picture than either alone.</p>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Linear probing</dt>
+    <dd>Freezing a trained model's representation and training a separate, simple linear classifier/regressor on
+    top of it to test whether some attribute is easily, linearly recoverable — independent of whatever the
+    model's own trained heads do with that representation.</dd>
+
+    <dt>Frozen representation</dt>
+    <dd>A representation extracted with <code>torch.no_grad()</code> from an already-trained model whose weights
+    are not being updated further — the probe trains on top of it, never through it.</dd>
+
+    <dt>R² (coefficient of determination)</dt>
+    <dd>How much better a model's predictions are than always guessing the training mean. <code>1</code> = perfect,
+    <code>0</code> = no better than the mean, negative = actively worse than the mean.</dd>
+
+    <dt>Chance-level baseline</dt>
+    <dd>The accuracy achievable with no information at all — for an 8-category classification task, roughly
+    <code>1/8 = 12.5%</code>. Scores near this line suggest the task may be intrinsically hard given the available
+    signal, not just poorly modeled.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Linear probing = freeze the backbone, train a brand-new simple linear model on its output, to test whether an attribute is cleanly, linearly present — independent of what the original trained heads do.</li>
+    <li><code>model.backbone(...)</code> is directly callable, bypassing the prediction heads entirely — no need to modify <code>forward()</code>.</li>
+    <li>The probe needs its own held-out split, separate from the model's own train/val/test split — otherwise its reported score is just memorization.</li>
+    <li>Age was dramatically more linearly decodable (R² 0.70–0.95) than item, price, or sum_insure — a real property of the backbone, not the age-head's separate passthrough trick.</li>
+    <li>Item accuracy sat near chance level for both the probes and the trained heads themselves — a hint that next-item prediction may be intrinsically hard in this dataset, not just under-modeled.</li>
+    <li>Negative R² means worse than predicting the mean — a real "no linear signal recovered" result, not a weak positive one.</li>
+    <li>With a small held-out set (n_test=23 here), trust the broad cross-feature pattern, not fine-grained rankings between fusion strategies.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="17-event-attribution.html"><span class="dir">Back</span>Lesson 17 — Event Attribution</a>
+    <a class="next" href="19-visualizing-representations.html"><span class="dir">Next</span>Lesson 19 — Visualizing Representations</a>
+  </div>
+</main>
+</body>
+</html>

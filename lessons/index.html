@@ -32,6 +32,9 @@
       <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
       <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
       <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+      <a class="pill" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
+      <a class="pill" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
+      <a class="pill" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
     </nav>
   </div>
 </header>
@@ -40,13 +43,14 @@
   <p class="eyebrow">Study Curriculum</p>
   <h1>A Study on Transformer</h1>
   <p class="subtitle">Understanding transformer architecture inside out — not as a language model, but as a general
-  sequence-processing pattern applied to insurance customer data. Nineteen lessons, most grounded in the actual
+  sequence-processing pattern applied to insurance customer data. Twenty-two lessons, most grounded in the actual
   code in this repo, covering two examples of the pattern applied outside insurance/NLP entirely, a multi-task
   extension of the encoder project, the real-world model (BERT) behind the CLS trick studied along the way, loss
   functions beyond plain MSE, how to read — and act on — whether any of it actually worked, where a target value
-  actually comes from, a runnable proof of the guarantee that makes shift-by-one work at all, and finally three
-  ways to interrogate a model after it's already trained — which events drove one prediction, how much
-  information its representation actually holds, and what that representation visually looks like.</p>
+  actually comes from, a runnable proof of the guarantee that makes shift-by-one work at all, four ways to
+  interrogate a model after it's already trained, a final synthesis that combines all four into one real answer,
+  and — underneath all of it — the tensor manipulation mechanics every earlier lesson used without stopping to
+  name.</p>
 
   <h2>How to use this</h2>
   <p>Read the lessons in order the first time — each one builds on the last. After that, use the pill nav above
@@ -125,6 +129,14 @@
       <div class="stack-box">Lesson 18 — Linear Probing<span class="sub">forget one prediction — is this attribute linearly recoverable from the representation at all?</span></div>
       <div class="stack-arrow">↓</div>
       <div class="stack-box">Lesson 19 — Visualizing Representations<span class="sub">UMAP on item embeddings and pooled customer vectors — mostly confirms Lessons 17 &amp; 18, once catches something they didn't</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">Lesson 20 — CKA<span class="sub">one number per model pair — which of the 6 configs learned similar representations, and which didn't</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">Lesson 21 — Final Synthesis<span class="sub">all four methods, all 6 configs, one table — which config actually wins, and for what</span></div>
+    </div>
+    <div style="text-align:center; margin: 6px 0; color: var(--text-dim); font-size: 0.85rem;">↓ the mechanics every lesson above used, named explicitly ↓</div>
+    <div class="stack">
+      <div class="stack-box">Lesson 22 — Tensor Manipulation<span class="sub">view/reshape, transpose/permute, squeeze/unsqueeze, broadcasting, matmul, fancy indexing, reductions — each tied to a real line you've already read</span></div>
     </div>
   </div>
 
@@ -160,6 +172,9 @@
     <tr><td>17</td><td><a href="17-event-attribution.html">Event Attribution</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>The model just predicted X for this customer — which of their past events actually caused it?</td></tr>
     <tr><td>18</td><td><a href="18-linear-probing.html">Linear Probing</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>Forget one prediction — does the representation linearly contain this attribute at all?</td></tr>
     <tr><td>19</td><td><a href="19-visualizing-representations.html">Visualizing Representations</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>What do Lessons 17 &amp; 18's findings actually look like — and does looking catch anything new?</td></tr>
+    <tr><td>20</td><td><a href="20-cka-comparing-representations.html">CKA</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>Across all 6 trained configs, which ones learned similar representations — and which learned genuinely different ones?</td></tr>
+    <tr><td>21</td><td><a href="21-final-synthesis.html">Final Synthesis</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>All four interrogation methods, all 6 configs — which one actually wins, and for what?</td></tr>
+    <tr><td>22</td><td><a href="22-tensor-manipulation.html">Tensor Manipulation</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>What do <code>.view()</code>, broadcasting, <code>matmul</code>, and fancy indexing actually do, explicitly?</td></tr>
   </table>
 
   <h2>Repo map</h2>
@@ -182,6 +197,9 @@
       <li>lesson 17 (Event Attribution) is grounded in <code>sequences_to_multiple_outcomes.ipynb</code> — a separate side-project notebook (2 architectures × 3 fusion strategies), not one of the three <code>train_insurance*.py</code> entry points</li>
       <li>lesson 18 (Linear Probing) is grounded in the same <code>sequences_to_multiple_outcomes.ipynb</code> as lesson 17 — its probing code sits right alongside the LOEO cells, reusing the same 6 saved checkpoints</li>
       <li>lesson 19 (Visualizing Representations) is grounded in the same notebook again, plus <code>main.py</code> for the repo's other precedent of UMAP usage (on contrastive embeddings, a different target than this lesson's item-embedding and pooled-representation plots)</li>
+      <li>lesson 20 (CKA) is grounded in the same notebook once more — its representation extraction is <code>build_probe_dataset</code> from lesson 18, reused unchanged across all 6 configs</li>
+      <li>lesson 21 (Final Synthesis) merges lessons 18 and 20's own dataframes/matrices with a fresh per-checkpoint metrics pull — no new extraction code, just combining what already existed</li>
+      <li>lesson 22 (Tensor Manipulation) is grounded in <code>attention.ipynb</code> — a separate from-scratch attention build outside the lessons/insurance codebase entirely — plus callbacks to <code>package/encoder_block.py</code>'s RoPE broadcasting and <code>sequences_to_multiple_outcomes.ipynb</code>'s fancy indexing</li>
     </ul>
   </div>
 

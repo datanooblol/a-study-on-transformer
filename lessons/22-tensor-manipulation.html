@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 22 — Tensor Manipulation: The Toolkit Underneath Everything</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+      <a class="pill" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
+      <a class="pill" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
+      <a class="pill current" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 22 of 22</p>
+  <h1>Tensor Manipulation: The Toolkit Underneath Everything</h1>
+  <p class="subtitle">Every lesson before this one used <code>.view()</code>, <code>.transpose()</code>,
+  <code>matmul</code>, broadcasting, or fancy indexing without stopping to pin the operation down on its own. This
+  lesson is that stop — an explicit, worked-example reference for the tensor manipulation toolkit, each one tied
+  back to a real line of code you've already read.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core — this is the mechanics underneath every lesson above, not specific to one architecture</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this one</span>
+    <ul>
+      <li><code>attention.ipynb</code> — the from-scratch attention build where these questions came up</li>
+      <li><code>package/encoder_block.py</code> — <code>RoPE</code>'s broadcasting, <code>MultiHeadAttention</code>'s <code>view</code>/<code>transpose</code></li>
+      <li><code>sequences_to_multiple_outcomes.ipynb</code> — <code>MultiTaskModel.forward</code>'s fancy indexing, Lesson 20's reduction-based CKA average</li>
+    </ul>
+  </div>
+
+  <h2>The question this lesson answers</h2>
+  <p>You've traced shapes step by step while building attention by hand, which is the right way to learn this —
+  but the specific vocabulary (<code>view</code> vs. <code>reshape</code>, <code>squeeze</code> vs.
+  <code>unsqueeze</code>, why broadcasting works, why <code>matmul</code> on 4D tensors "just works" per-head) was
+  never pinned down as its own topic. This lesson does that, with a runnable before/after example for each
+  operation.</p>
+
+  <h2>1. <code>.view()</code> vs. <code>.reshape()</code></h2>
+  <p>Both reinterpret a tensor's existing values as a new shape — no values are recomputed, only regrouped. The
+  difference is what happens when the underlying memory isn't laid out in a way that makes that regrouping free.</p>
+  <div class="code-block">
+    <div class="file-tag">explicit example</div>
+    <pre><code>x = torch.arange(12)          # tensor([0, 1, 2, ..., 11])
+y = x.view(2, 6)
+print(y)
+# tensor([[ 0,  1,  2,  3,  4,  5],
+#         [ 6,  7,  8,  9, 10, 11]])
+
+z = y.view(2, 3, 2)
+print(z)
+# tensor([[[ 0,  1], [ 2,  3], [ 4,  5]],
+#         [[ 6,  7], [ 8,  9], [10, 11]]])</code></pre>
+  </div>
+  <p>Same 12 numbers throughout, just relabeled into different-shaped boxes, always filled in the same left-to-right,
+  row-by-row order. <code>.view()</code> requires the tensor to be <em>contiguous</em> in memory — if it isn't (most
+  often right after a <code>.transpose()</code> or <code>.permute()</code>), <code>.view()</code> raises an error.
+  <code>.reshape()</code> does the same job but silently falls back to copying memory if a free reshape isn't
+  possible — a safer default when you're not sure. You've already used both patterns: <code>.view(batch, seq_len,
+  n_heads, head_dim)</code> to split heads apart, and — after transposing back — <code>.contiguous().view(...)</code>
+  (or plain <code>.reshape(...)</code>) to merge them again, matching <code>package/encoder_block.py</code>'s
+  exact pattern.</p>
+
+  <h2>2. <code>.transpose()</code> vs. <code>.permute()</code></h2>
+  <p><code>.transpose(dim0, dim1)</code> swaps exactly two axes. <code>.permute(*dims)</code> generalizes this to
+  reorder <em>any number</em> of axes in one call.</p>
+  <div class="code-block">
+    <div class="file-tag">explicit example</div>
+    <pre><code>x = torch.rand(2, 3, 4)
+print(x.transpose(0, 1).shape)     # (3, 2, 4) -- axes 0 and 1 swapped, axis 2 untouched
+print(x.permute(2, 0, 1).shape)    # (4, 2, 3) -- axis 2 moved to front, 0 and 1 shifted right</code></pre>
+  </div>
+  <p>Neither operation moves any actual memory — both just change how the tensor is <em>read</em>, which is exactly
+  why the tensor becomes non-contiguous afterward and why <code>.view()</code> can fail right after either of them.
+  You used <code>.transpose(1, 2)</code> twice while building multi-head attention: once to move <code>n_heads</code>
+  next to <code>batch</code> before the per-head <code>matmul</code>, once to move it back before merging heads.</p>
+
+  <h2>3. <code>.squeeze()</code> vs. <code>.unsqueeze()</code></h2>
+  <p><code>.unsqueeze(dim)</code> inserts a new size-1 axis at position <code>dim</code>. <code>.squeeze(dim)</code>
+  removes one, if it's size 1.</p>
+  <div class="code-block">
+    <div class="file-tag">explicit example</div>
+    <pre><code>x = torch.tensor([1., 2., 3.])
+print(x.shape)                  # (3,)
+print(x.unsqueeze(0).shape)     # (1, 3)  -- new axis at the front
+print(x.unsqueeze(-1).shape)    # (3, 1)  -- new axis at the end
+
+y = x.unsqueeze(0)
+print(y.squeeze(0).shape)       # (3,) -- back to the original</code></pre>
+  </div>
+  <p>You've already used this exact pattern in <code>predict_one</code>: <code>.unsqueeze(0)</code> adds a batch
+  dimension of size 1 to a single customer's sequence, and <code>.unsqueeze(-1)</code> turns a flat list of ages
+  into a <code>(seq_len, 1)</code> column so it matches what <code>nn.Linear(1, d_model)</code> expects as input.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / gotcha — <code>.squeeze()</code> with no argument</div>
+    <p>Calling <code>.squeeze()</code> with no <code>dim</code> removes <em>every</em> size-1 axis at once, not
+    just one you had in mind. That's fine for a `(1, 5)` tensor, but dangerous for something like `(batch, 1,
+    d_model)` when `batch` happens to be `1` in one particular run — you'd silently lose the batch axis too,
+    collapsing a shape you needed to keep. Prefer always naming the specific `dim` you want squeezed.</p>
+  </div>
+
+  <h2>4. Broadcasting — the rule underneath a line you've already read</h2>
+  <p>When two tensors have different shapes, arithmetic between them (<code>+</code>, <code>*</code>, etc.) tries
+  to align them by comparing dimensions from the <strong>right</strong>. Two dimensions are compatible if they're
+  equal, or if either one is <code>1</code> — a size-1 dimension gets stretched to match.</p>
+  <div class="code-block">
+    <div class="file-tag">explicit example</div>
+    <pre><code>a = torch.rand(2, 4, 1, 5)
+b = torch.rand(1, 1, 3, 5)
+print((a + b).shape)   # (2, 4, 3, 5)
+# axis -1: 5 == 5           -> keep 5
+# axis -2: 1 vs 3           -> stretch the 1 to 3
+# axis -3: 4 vs 1           -> stretch the 1 to 4
+# axis -4: 2 vs 1           -> stretch the 1 to 2</code></pre>
+  </div>
+  <p>This is exactly what makes <code>package/encoder_block.py</code>'s RoPE work: <code>freqs =
+  self.freqs[:seq_len].unsqueeze(0).unsqueeze(2)</code> deliberately inserts two size-1 axes so <code>freqs</code>
+  (shape <code>(1, seq_len, 1, head_dim//2, 2)</code>) broadcasts cleanly against <code>x</code>'s
+  <code>(batch, seq_len, n_heads, head_dim//2, 2)</code> — every position and every head reuses the exact same
+  rotation angles, without ever materializing a full-size copy of them.</p>
+
+  <h2>5. <code>matmul</code>/<code>@</code> vs. elementwise <code>*</code>, and batched <code>matmul</code></h2>
+  <p><code>*</code> multiplies element-by-element — shapes must already match or broadcast, nothing gets
+  contracted away. <code>matmul</code>/<code>@</code> is real matrix multiplication: it contracts the
+  <em>last</em> dimension of the first tensor against the <em>second-to-last</em> of the second.</p>
+  <div class="code-block">
+    <div class="file-tag">explicit example</div>
+    <pre><code>x = torch.rand(3, 4)
+y = torch.rand(3, 4)
+print((x * y).shape)                    # (3, 4)  -- elementwise, shape unchanged
+print((x @ y.transpose(0, 1)).shape)    # (3, 3)  -- the shared dim (4) is contracted away</code></pre>
+  </div>
+  <p>For tensors with more than 2 dimensions, <code>matmul</code> treats every axis before the last two as a
+  <strong>batch</strong> dimension, and runs an independent 2D matrix multiply across all of them at once. That's
+  the exact mechanism that let <code>q_heads @ k_heads.transpose(-2,-1)</code> compute all 4 heads' attention in
+  parallel with zero explicit looping — <code>(batch, n_heads, seq, head_dim) @ (batch, n_heads, head_dim, seq)</code>
+  treats <code>(batch, n_heads)</code> as one combined batch axis, and only matmuls the trailing
+  <code>(seq, head_dim)</code> pair per head.</p>
+
+  <h2>6. Fancy (advanced) indexing — already hiding in your own repo</h2>
+  <p>Basic slicing (<code>t[:, 2]</code>) picks one fixed index per axis. Fancy indexing passes <em>tensors</em> of
+  indices, one element chosen independently per position:</p>
+  <div class="code-block">
+    <div class="file-tag">explicit example</div>
+    <pre><code>t = torch.arange(20).view(4, 5)
+print(t)
+# tensor([[ 0,  1,  2,  3,  4],
+#         [ 5,  6,  7,  8,  9],
+#         [10, 11, 12, 13, 14],
+#         [15, 16, 17, 18, 19]])
+
+row_idx = torch.arange(4)              # [0, 1, 2, 3]
+col_idx = torch.tensor([2, 4, 1, 0])   # a different column per row
+print(t[row_idx, col_idx])
+# tensor([ 2,  9, 11, 15]) -- t[0,2], t[1,4], t[2,1], t[3,0], all in one call</code></pre>
+  </div>
+  <p>This is precisely what <code>MultiTaskModel.forward</code> does: <code>ages_norm[batch_idx, lengths-1, 0]</code>
+  picks a different sequence position — each customer's own last real event — for every row in the batch
+  simultaneously, with no Python loop. <code>torch.gather</code> is the more general tool for the same idea when
+  the index pattern is more complex than a single per-row pick.</p>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — basic slicing returns a view, fancy indexing returns a copy</div>
+    <p>Worth knowing this distinction exists: <code>t[:, 2]</code> shares memory with <code>t</code> (modifying it
+    in place would affect <code>t</code> too), while <code>t[row_idx, col_idx]</code> always allocates new memory
+    — modifying the result never touches the original tensor. Rarely bites you, but explains occasional
+    "why didn't my in-place edit show up" confusion.</p>
+  </div>
+
+  <h2>7. Reductions, <code>dim</code>, and <code>keepdim</code></h2>
+  <p><code>.sum(dim=...)</code>, <code>.mean(dim=...)</code>, <code>.max(dim=...)</code>,
+  <code>.argmax(dim=...)</code> — the <code>dim</code> argument names the axis that gets <strong>collapsed</strong>
+  (removed), not the axis that survives. This is the single most common off-by-one-axis confusion with reductions.</p>
+  <div class="code-block">
+    <div class="file-tag">explicit example</div>
+    <pre><code>x = torch.rand(2, 3, 4)
+print(x.sum(dim=1).shape)               # (2, 4)    -- axis 1 (size 3) is gone
+print(x.sum(dim=1, keepdim=True).shape) # (2, 1, 4) -- axis 1 kept, but shrunk to size 1</code></pre>
+  </div>
+  <p>Two places you've already relied on this: <code>softmax(dim=-1)</code> in every attention block collapses over
+  the <em>key</em> axis, so each query's attention weights sum to 1 across all the keys it can see. Lesson 20's
+  <code>avg_cka_similarity = (cka_matrix.sum(axis=1) - 1.0) / (len(configs) - 1)</code> collapses each row of the
+  6×6 similarity matrix into one "average similarity to everyone else" number per config — <code>keepdim</code>
+  wasn't needed there since the result was meant to end up 1D.</p>
+
+  <h2>Cheat sheet</h2>
+  <table class="cmp">
+    <tr><th>Operation</th><th>What it does</th><th>Changes memory layout?</th></tr>
+    <tr><td><code>.view(...)</code></td><td>Reinterpret existing values as a new shape</td><td>No — errors if not contiguous</td></tr>
+    <tr><td><code>.reshape(...)</code></td><td>Same as <code>.view()</code>, but copies memory automatically if needed</td><td>Only if necessary</td></tr>
+    <tr><td><code>.transpose(d0, d1)</code></td><td>Swap two axes</td><td>No — becomes non-contiguous</td></tr>
+    <tr><td><code>.permute(*dims)</code></td><td>Reorder any number of axes at once</td><td>No — becomes non-contiguous</td></tr>
+    <tr><td><code>.unsqueeze(dim)</code></td><td>Insert a size-1 axis</td><td>No</td></tr>
+    <tr><td><code>.squeeze(dim)</code></td><td>Remove a size-1 axis</td><td>No</td></tr>
+    <tr><td>broadcasting (<code>+</code>, <code>*</code>)</td><td>Align shapes from the right; stretch size-1 axes</td><td>No new memory for the stretched axis</td></tr>
+    <tr><td><code>matmul</code> / <code>@</code></td><td>Contract the last axis of A against the second-to-last of B</td><td>Allocates a new result tensor</td></tr>
+    <tr><td>fancy indexing (<code>t[i, j]</code> with tensors)</td><td>Pick one element per position, independently</td><td>Always copies</td></tr>
+    <tr><td><code>.sum</code>/<code>.mean</code>/<code>.max</code>(<code>dim=</code>)</td><td>Collapse the named axis</td><td>Allocates a new, smaller result tensor</td></tr>
+  </table>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Contiguous</dt>
+    <dd>A tensor whose values are laid out in memory in the same order its shape implies — reading it left to
+    right, top to bottom, matches how it's actually stored. <code>.transpose()</code>/<code>.permute()</code>
+    break this without moving any memory; <code>.view()</code> requires it, <code>.contiguous()</code> or
+    <code>.reshape()</code> restore/route around it.</dd>
+
+    <dt>Broadcasting</dt>
+    <dd>The rule PyTorch uses to combine tensors of different shapes in elementwise operations — align from the
+    right, dimensions must match or be 1, size-1 dimensions get stretched.</dd>
+
+    <dt>Batched matmul</dt>
+    <dd><code>matmul</code>'s behavior on tensors with more than 2 dimensions — every axis before the last two is
+    treated as an independent batch, with ordinary 2D matrix multiplication run separately across each one.</dd>
+
+    <dt>Fancy (advanced) indexing</dt>
+    <dd>Indexing with tensors of indices instead of single integers or slices — picks one element per position
+    independently, always returns a new copy rather than a view into the original tensor.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li><code>.view()</code> and <code>.reshape()</code> do the same logical job; <code>.reshape()</code> is the safer default since it handles non-contiguous tensors automatically.</li>
+    <li><code>.transpose()</code>/<code>.permute()</code> never move memory — that's exactly why a <code>.view()</code> right after either one can fail without <code>.contiguous()</code> first.</li>
+    <li><code>.squeeze()</code> with no argument removes every size-1 axis at once — always name the axis you actually mean.</li>
+    <li>Broadcasting aligns shapes from the right; a size-1 axis stretches to match, everything else must match exactly or it errors.</li>
+    <li><code>matmul</code> contracts the last axis of the first tensor against the second-to-last of the second; on 3D+ tensors, every leading axis acts as an independent batch — this is what made multi-head attention parallel with no explicit loop.</li>
+    <li>Fancy indexing (tensor-valued indices) picks one element per position independently and always copies; basic slicing shares memory with the original.</li>
+    <li>A reduction's <code>dim</code> argument names the axis that disappears, not the axis that survives.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="21-final-synthesis.html"><span class="dir">Back</span>Lesson 21 — Final Synthesis</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

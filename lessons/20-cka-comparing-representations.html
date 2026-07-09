@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 20 — CKA: Comparing Representations Across Models</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+      <a class="pill current" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
+      <a class="pill" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
+      <a class="pill" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 20 of 22</p>
+  <h1>CKA: Comparing Representations Across Models</h1>
+  <p class="subtitle">Lessons 17–19 each looked at one trained model at a time — which events it used, how much it
+  knows, what its representation looks like. This lesson asks a question those can't: across all 6 trained
+  configs, which ones learned <em>similar</em> representations, and which learned genuinely different ones?
+  Centered Kernel Alignment (CKA) answers that with one principled number per pair, instead of eyeballing six
+  separate R² tables side by side.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge multi"><span class="dot"></span>All 6 configs compared pairwise — 2 architectures × 3 fusion strategies</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this one</span>
+    <ul>
+      <li><code>sequences_to_multiple_outcomes.ipynb</code> — same notebook as Lessons 17–19; this lesson's code reuses <code>build_probe_dataset</code> directly</li>
+      <li><a href="18-linear-probing.html">Lesson 18</a> — the extraction machinery this lesson's representations come from</li>
+      <li><a href="17-event-attribution.html">Lesson 17</a> — the qualitative "encoder is a bottleneck, decoder is distributed" claim this lesson checks quantitatively</li>
+    </ul>
+  </div>
+
+  <h2>The problem CKA solves: raw coordinates aren't comparable across models</h2>
+  <p>Two independently trained models — even the same architecture, different random initialization — have no
+  reason to agree on what any particular dimension of their representation "means." If a good representation gets
+  rotated, reflected, or rescaled, every linear head trained on top of it still works exactly as well (it just
+  learns different weights to compensate) — so gradient descent has no pressure to prefer one coordinate system
+  over another. That means comparing two models' representations dimension-by-dimension is close to meaningless:
+  "dimension 5" carries no consistent significance from one trained model to the next.</p>
+
+  <p>A concrete check: rotate three toy customers' 2D representation by 90°.</p>
+  <table class="cmp">
+    <tr><th>Customer</th><th>Original coords</th><th>Rotated 90° coords</th></tr>
+    <tr><td>A</td><td>(2, 1)</td><td>(-1, 2)</td></tr>
+    <tr><td>B</td><td>(5, 1)</td><td>(-1, 5)</td></tr>
+    <tr><td>C</td><td>(2, 4)</td><td>(-4, 2)</td></tr>
+  </table>
+  <p>Every single raw coordinate changed. But the pairwise distances didn't: A–B = 3 in both, A–C = 3 in both,
+  B–C ≈ 4.24 in both. A naive per-dimension comparison would call these two representations unrelated. Anything
+  that instead compares <em>relative structure between examples</em> — which is exactly what CKA does — correctly
+  calls them identical.</p>
+
+  <h2>What CKA actually computes</h2>
+  <p>Instead of comparing raw vectors, CKA compares how similar every pair of examples is <em>according to each
+  representation</em>, then checks whether those two similarity patterns line up. That's the piece that's
+  invariant to rotation and scaling — relative distances between examples survive a rotation even though the raw
+  coordinates don't, exactly as the toy example above showed.</p>
+
+  <p>The linear-kernel version used here has an efficient closed form, for two centered representation matrices
+  <code>X</code> (n × d₁) and <code>Y</code> (n × d₂) over the <em>same</em> n examples:</p>
+  <div class="code-block">
+    <div class="file-tag">linear CKA</div>
+    <pre><code>CKA(X, Y) = ||Xᵀ Y||²_F  /  ( ||Xᵀ X||_F · ||Yᵀ Y||_F )</code></pre>
+  </div>
+  <p>This is mathematically equivalent to the textbook definition (which compares n × n "how similar is example i
+  to example j" Gram matrices for each representation), but computed via d × d products instead of n × n ones —
+  more efficient whenever there are more examples than dimensions, exactly our case (≈75 test customers, 32-dim
+  representations). Score range: <code>0</code> (unrelated structure) to <code>1</code> (identical structure up
+  to rotation and scaling). The one hard requirement: both representations must come from the <em>same</em> set of
+  examples, in the same order — <code>X</code> and <code>Y</code> can have different dimensionality, but not a
+  different, unaligned set of rows.</p>
+
+  <h2>Applying it to all 6 configs</h2>
+  <p>Reuses Lesson 18's extraction pipeline exactly — CKA is a downstream analysis on representations already
+  built for probing, not a new extraction step:</p>
+
+  <div class="code-block">
+    <div class="file-tag">sequences_to_multiple_outcomes.ipynb (excerpt)</div>
+    <pre><code>configs = [
+    ("encoder", "sum"), ("encoder", "concat_all"), ("encoder", "concat_emb_summed"),
+    ("decoder", "sum"), ("decoder", "concat_all"), ("decoder", "concat_emb_summed"),
+]
+
+models = {key: load_model(*key)[0] for key in configs}
+probe_customers = collect_all_test_customers(min_len=2)
+
+representations = {
+    key: build_probe_dataset(model, key[0], probe_customers)[0]  # [0] = X, same customers for every config
+    for key, model in models.items()
+}
+
+def linear_cka(X, Y):
+    X = X - X.mean(axis=0, keepdims=True)
+    Y = Y - Y.mean(axis=0, keepdims=True)
+    hsic = np.linalg.norm(X.T @ Y, ord="fro") ** 2
+    norm_x = np.linalg.norm(X.T @ X, ord="fro")
+    norm_y = np.linalg.norm(Y.T @ Y, ord="fro")
+    return hsic / (norm_x * norm_y)
+
+cka_matrix = np.array([
+    [linear_cka(representations[a], representations[b]) for b in configs]
+    for a in configs
+])</code></pre>
+  </div>
+
+  <h2>Reading the actual 6×6 heatmap</h2>
+  <table class="cmp">
+    <tr><th></th><th>enc/sum</th><th>enc/concat_all</th><th>enc/concat_emb</th><th>dec/sum</th><th>dec/concat_all</th><th>dec/concat_emb</th></tr>
+    <tr><td>enc/sum</td><td>1.00</td><td>0.68</td><td>0.71</td><td>0.52</td><td>0.65</td><td>0.57</td></tr>
+    <tr><td>enc/concat_all</td><td>0.68</td><td>1.00</td><td>0.80</td><td>0.59</td><td>0.68</td><td>0.61</td></tr>
+    <tr><td>enc/concat_emb</td><td>0.71</td><td>0.80</td><td>1.00</td><td>0.55</td><td>0.72</td><td>0.62</td></tr>
+    <tr><td>dec/sum</td><td>0.52</td><td>0.59</td><td>0.55</td><td>1.00</td><td>0.80</td><td>0.76</td></tr>
+    <tr><td>dec/concat_all</td><td>0.65</td><td>0.68</td><td>0.72</td><td>0.80</td><td>1.00</td><td>0.82</td></tr>
+    <tr><td>dec/concat_emb</td><td>0.57</td><td>0.61</td><td>0.62</td><td>0.76</td><td>0.82</td><td>1.00</td></tr>
+  </table>
+
+  <p><strong>Architecture matters, but moderately, not dramatically.</strong> Average within-architecture
+  similarity: encoder-to-encoder ≈0.73, decoder-to-decoder ≈0.79. Average cross-architecture similarity: ≈0.61.
+  Same-architecture pairs are consistently higher — an independent, quantitative confirmation of Lesson 17's
+  qualitative "these are different kinds of representations" claim. But nothing here drops near <code>0</code>;
+  all 6 configs still share substantial common structure, which makes sense since they're all solving the same
+  task from the same fused input features, just wired differently.</p>
+
+  <p><strong>Decoder configs form the tightest cluster in the whole matrix</strong> (0.76–0.82 among themselves) —
+  tighter than the encoder configs are with each other (0.68–0.80). This lines up with a mechanistic story from
+  Lesson 17: shift-by-one supervision at every position, across every prefix length seen in training, plausibly
+  pushes the decoder toward a more redundant, distributed representation regardless of prediction task — and that
+  same redundancy could make it less sensitive to which fusion strategy feeds it, producing more mutually
+  consistent representations than the encoder's single-CLS-bottleneck manages.</p>
+
+  <p><strong>Fusion strategy alone doesn't explain the pattern either.</strong> The single weakest link in the
+  entire matrix is <code>encoder/sum</code> vs. <code>decoder/sum</code> (0.52) — the <em>same</em> fusion
+  strategy across architectures is the <em>worst</em> match in the table, not a strong one. If fusion strategy
+  dominated over architecture, same-fusion pairs should hold up reasonably well regardless of architecture; that's
+  not what happened.</p>
+
+  <p><strong><code>decoder/concat_all</code> is the most "typical" representation of the six</strong> — highest
+  average similarity to the rest of the group, including the strongest cross-architecture link anywhere in the
+  table (0.72, to <code>encoder/concat_emb_summed</code>). <strong><code>encoder/sum</code> is the most
+  idiosyncratic</strong> — lowest average similarity to everything else, including that global-minimum link to
+  <code>decoder/sum</code>.</p>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — CKA tells you "how similar," not "which is better"</div>
+    <p>A high CKA score means two representations share structure; it says nothing about whether that shared
+    structure is useful. Two very similar representations could both be equally mediocre, and two very different
+    representations could both achieve strong downstream accuracy through genuinely different means. Pair CKA with
+    something that measures task performance — Lesson 18's probe R²/accuracy is the natural partner here — before
+    concluding a high-similarity pair is "the same, and good" rather than just "the same."</p>
+  </div>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — linear CKA needs enough examples, and only sees linear structure</div>
+    <p>Two caveats worth carrying forward. First, CKA needs a reasonably sized, stable sample to mean much — with
+    very few examples (like Lesson 19's 8-point item embedding table), CKA would be just as noisy as UMAP was
+    there; this lesson's ≈75 test customers is a reasonable minimum, not a generous one. Second, the linear kernel
+    used here — matching Lesson 18's "deliberately weak reader" philosophy for linear probes — only detects
+    <em>linear</em> relationships between the two representations' structure. An RBF-kernel variant of CKA exists
+    for nonlinear structure comparison; we didn't need it here, but it's the natural next tool if two
+    representations score low on linear CKA yet still seem to behave similarly downstream.</p>
+  </div>
+
+  <h2>Four ways to interrogate a trained model, side by side</h2>
+  <table class="cmp">
+    <tr><th></th><th>17 — LOEO</th><th>18 — Probing</th><th>19 — UMAP</th><th>20 — CKA</th></tr>
+    <tr><td>Question</td><td>Which events drove <em>this</em> prediction?</td><td>Is this attribute linearly present at all?</td><td>What does the representation look like?</td><td>How similar are representations <em>across models</em>?</td></tr>
+    <tr><td>Scope</td><td>One customer, one model</td><td>Many customers, one model</td><td>Many customers/items, one or two models</td><td>Many customers, all models at once</td></tr>
+    <tr><td>Output</td><td>Per-event impact scores</td><td>R² / accuracy per attribute</td><td>A 2D picture</td><td>One similarity number per model pair</td></tr>
+  </table>
+  <p>None of these four replaces another — each answers a question the other three structurally can't. Occlusion
+  never tells you what's in the representation overall; probing never tells you which specific event mattered;
+  visualization never gives you a single comparable number across six models at once; CKA never tells you what a
+  representation actually encodes, only how similar two of them are in structure.</p>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>CKA (Centered Kernel Alignment)</dt>
+    <dd>A similarity measure between two representations of the same examples, invariant to rotation and
+    isotropic scaling — compares the structure of pairwise example-similarity rather than raw coordinates.</dd>
+
+    <dt>Gram matrix</dt>
+    <dd>An n × n matrix where entry (i, j) is the similarity (e.g. dot product) between example i and example j
+    under one representation — the "textbook" object CKA compares between two representations; the linear-kernel
+    formula used here computes the same result more efficiently without ever forming it explicitly.</dd>
+
+    <dt>Rotation invariance</dt>
+    <dd>A property where rotating (or reflecting, or uniformly scaling) a representation doesn't change the
+    measured similarity — necessary because independently trained models have no reason to agree on which raw
+    direction means what, even if they encode the same information.</dd>
+
+    <dt>Linear vs. RBF-kernel CKA</dt>
+    <dd>Linear CKA detects only linear relationships between two representations' structure, mirroring the
+    "deliberately weak reader" logic of Lesson 18's linear probes. RBF-kernel CKA can detect nonlinear structural
+    relationships instead, at more compute cost.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Raw coordinates aren't comparable across independently trained models — any rotation/reflection/scaling of a good representation is equally good, so gradient descent has no reason to align coordinate systems across runs.</li>
+    <li>CKA sidesteps this by comparing the structure of pairwise example-similarity instead of raw vectors — provably invariant to rotation and scaling.</li>
+    <li>Needs the same set of examples run through every representation being compared; dimensionality can differ, the example set cannot.</li>
+    <li>Our 6-config heatmap showed architecture matters moderately (within-arch ≈0.73–0.79 vs. cross-arch ≈0.61), decoder configs cluster tightest, and same-fusion-strategy pairs across architectures were <em>not</em> reliably similar (the global minimum was exactly such a pair).</li>
+    <li>CKA measures similarity, not quality — pair it with a task-performance metric (like Lesson 18's probe R²/accuracy) before concluding a high-similarity pair is "good," not just "similar."</li>
+    <li>LOEO, probing, UMAP, and CKA are complementary, not redundant — each answers a question the other three structurally cannot.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="19-visualizing-representations.html"><span class="dir">Back</span>Lesson 19 — Visualizing Representations</a>
+    <a class="next" href="21-final-synthesis.html"><span class="dir">Next</span>Lesson 21 — Final Synthesis</a>
+  </div>
+</main>
+</body>
+</html>

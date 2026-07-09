@@ -1,7 +1,7 @@
 architecture,fusion,best_epoch,val_loss,item_acc,age_mae,price_mae,sum_insure_mae
-decoder,concat_all,15,3.0917,0.1739,1.26,1457.45,28979.08
-decoder,concat_emb_summed,15,3.0846,0.1884,1.27,1453.01,28693.65
-decoder,sum,15,3.1075,0.1848,1.26,1487.04,28327.47
-encoder,concat_all,40,2.4915,0.2065,1.3,1482.46,28263.83
-encoder,concat_emb_summed,20,2.6633,0.1558,1.26,1502.26,28227.96
-encoder,sum,20,2.841,0.1594,1.28,1484.06,29340.11
+decoder,concat_all,25,3.9539,0.1667,1.31,1681.29,32804.7
+decoder,concat_emb_summed,25,3.8699,0.1522,1.29,1584.57,32773.8
+decoder,sum,20,3.9722,0.1558,1.27,1628.92,34235.8
+encoder,concat_all,20,3.3958,0.1486,1.29,1437.27,34175.42
+encoder,concat_emb_summed,25,3.3791,0.1558,1.26,1432.53,34668.19
+encoder,sum,30,3.5226,0.1522,1.28,1440.8,34813.96

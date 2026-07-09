@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 21 — Final Synthesis: Which Config Actually Wins?</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+      <a class="pill" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
+      <a class="pill current" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
+      <a class="pill" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 21 of 22</p>
+  <h1>Final Synthesis: Which Config Actually Wins?</h1>
+  <p class="subtitle">Six trained configs (2 architectures × 3 fusion strategies). Four interrogation methods
+  (Lessons 17–20), each giving a different partial answer. This lesson puts every number side by side and asks
+  the question the whole side-project started with: which one should you actually use, and for what?</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge multi"><span class="dot"></span>All 6 configs, four combined methods</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files &amp; lessons to have open alongside this one</span>
+    <ul>
+      <li><code>sequences_to_multiple_outcomes.ipynb</code> — the synthesis cells sit right after Lesson 20's CKA cells</li>
+      <li><a href="06-applied-decoder-insurance.html">Lesson 6</a> / <a href="07-applied-encoder-insurance.html">Lesson 7</a> / <a href="10-multi-task-encoder.html">Lesson 10</a> — the original projects this whole grid of 6 configs was built from</li>
+      <li><a href="17-event-attribution.html">Lesson 17</a>, <a href="18-linear-probing.html">Lesson 18</a>, <a href="20-cka-comparing-representations.html">Lesson 20</a> — where each ingredient of this table comes from</li>
+    </ul>
+  </div>
+
+  <h2>Scope: what's fully covered here, and what isn't</h2>
+  <p>Worth being upfront about this before the table, rather than implying more rigor than what was actually
+  done. Training metrics, linear probing, and CKA were all run across <strong>all 6 configs</strong>. LOEO
+  (Lesson 17) was only run on 2 of 6 (<code>encoder/concat_all</code> and <code>decoder/concat_all</code>) — its
+  finding (encoder ≈10× more occlusion-sensitive than decoder) is included below as an illustrative, plausible
+  pattern, not a measured result for all 6. That was a deliberate scoping choice made to keep this a synthesis
+  session rather than another full research session — see the checklist for what a full extension would take.</p>
+
+  <h2>The combined table</h2>
+  <p>Built by merging three pipelines that already existed — no new extraction code, just reuse:</p>
+  <div class="code-block">
+    <div class="file-tag">sequences_to_multiple_outcomes.ipynb (excerpt)</div>
+    <pre><code>train_df = pd.DataFrame([...])       # fresh best_metrics per checkpoint (Lesson 18's load_model)
+probe_renamed = probe_df.rename(...)  # Lesson 18's linear probes, all 6 configs
+avg_cka_similarity = (cka_matrix.sum(axis=1) - 1.0) / (len(configs) - 1)  # Lesson 20's CKA matrix
+
+synthesis_df = train_df.merge(probe_renamed, on=["architecture", "fusion"])
+synthesis_df["avg_cka_similarity"] = ...</code></pre>
+  </div>
+
+  <div style="overflow-x:auto;">
+  <table class="cmp">
+    <tr><th>Architecture</th><th>Fusion</th><th>val_loss</th><th>item_acc (head)</th><th>age_mae (head)</th><th>price_mae (head)</th><th>sum_insure_mae (head)</th><th>item_acc (probe)</th><th>age_r2 (probe)</th><th>price_r2 (probe)</th><th>sum_insure_r2 (probe)</th><th>avg CKA sim</th></tr>
+    <tr><td>encoder</td><td>concat_emb_summed</td><td>3.3791</td><td>0.156</td><td>1.26</td><td>1432.53</td><td>34668.19</td><td>0.217</td><td>0.820</td><td>-0.208</td><td>0.159</td><td>0.680</td></tr>
+    <tr><td>encoder</td><td>concat_all</td><td>3.3958</td><td>0.149</td><td>1.29</td><td>1437.27</td><td>34175.42</td><td>0.130</td><td>0.811</td><td>-0.103</td><td>0.166</td><td>0.670</td></tr>
+    <tr><td>encoder</td><td>sum</td><td>3.5226</td><td>0.152</td><td>1.28</td><td>1440.80</td><td>34813.96</td><td>0.043</td><td>0.771</td><td>-0.035</td><td>0.261</td><td>0.624</td></tr>
+    <tr><td>decoder</td><td>concat_emb_summed</td><td>3.8699</td><td>0.152</td><td>1.29</td><td>1584.57</td><td>32773.80</td><td>0.043</td><td>0.910</td><td>-0.205</td><td>-0.585</td><td>0.675</td></tr>
+    <tr><td>decoder</td><td>concat_all</td><td>3.9539</td><td>0.167</td><td>1.31</td><td>1681.29</td><td>32804.70</td><td>0.087</td><td>0.950</td><td>-0.379</td><td>-0.262</td><td>0.733</td></tr>
+    <tr><td>decoder</td><td>sum</td><td>3.9722</td><td>0.156</td><td>1.27</td><td>1628.92</td><td>34235.80</td><td>0.087</td><td>0.947</td><td>-0.498</td><td>-0.029</td><td>0.643</td></tr>
+  </table>
+  </div>
+  <p class="diagram-caption">Sorted by <code>val_loss</code> ascending (lower = better composite performance). "head" = the trained model's own prediction quality; "probe" = a frozen linear read-out, per Lesson 18.</p>
+
+  <h2>What the full table shows that no single earlier lesson did</h2>
+
+  <p><strong>Architecture cleanly wins on overall training performance — total separation.</strong> All 3 encoder
+  configs (val_loss 3.38–3.52) beat all 3 decoder configs (3.87–3.97), with no overlap. Within each architecture,
+  <code>concat_emb_summed</code> is the best fusion strategy — the same ranking holds in both groups. If you only
+  read one number: <strong>encoder/concat_emb_summed</strong> is the best-trained config, full stop.</p>
+
+  <p><strong>Age is where the story flips, and it's not visible at the head level at all.</strong> Every config's
+  <code>age_mae</code> sits in a tight 1.26–1.31 band — the trained heads are nearly indistinguishable. But probe
+  R² splits with zero overlap: decoder (0.91–0.95) entirely above encoder (0.77–0.82). Best explanation: the
+  decoder's read-out <em>is</em> an actual sequence position — the customer's last real event — so that position's
+  own current-age value rides straight through the residual connections into its own output, nearly for free
+  (<a href="16-proving-shift-by-one.html">Lesson 16</a>'s causal-equivalence machinery guarantees this position's
+  computation only ever depended on itself and earlier positions). The encoder's CLS token has no such privilege —
+  it's a separate learned parameter that only ever receives age information secondhand, through attention. A
+  read-out that <em>is</em> one of the input positions gets a structural advantage a dedicated pooling token
+  doesn't.</p>
+
+  <p><strong>Item and sum_insure show a genuine head-vs-representation divergence.</strong>
+  <code>decoder/concat_all</code> has the single best trained item accuracy of all 6 (0.167) — yet one of the
+  worst probe item accuracies (0.087). Its head is doing real nonlinear work a linear probe structurally can't
+  reach. Sum_insure shows the same pattern in reverse: decoder heads get lower MAE than encoder heads
+  (32.8–34.2k vs. 34.2–34.8k) despite encoder's representation being the only one with positive sum_insure R²
+  (0.16–0.26, vs. decoder's near-zero-to-negative -0.03 to -0.59). Encoder's advantage on these two is "already
+  linearly there"; decoder's is "extracted through nonlinear computation the probe can't see."</p>
+
+  <p><strong>Price stays undecodable everywhere.</strong> Every single probe R² is negative — no config shows
+  reliable linear price structure, encoder only "less bad" than decoder throughout.</p>
+
+  <p><strong>CKA confirms decoder/concat_all as the most "typical" representation</strong> (highest avg CKA
+  similarity, 0.733) and encoder/sum as the most idiosyncratic (0.624) — consistent with Lesson 20.</p>
+
+  <h2>Which config wins — by what you're actually optimizing for</h2>
+  <table class="cmp">
+    <tr><th>Priority</th><th>Best config</th><th>Why</th></tr>
+    <tr><td>Best overall trained performance</td><td><code>encoder/concat_emb_summed</code></td><td>Lowest val_loss; competitive on every individual metric</td></tr>
+    <tr><td>Sum_insure prediction, transparent representation</td><td><code>encoder/sum</code></td><td>Only config with clearly positive sum_insure R² (0.261)</td></tr>
+    <tr><td>Age prediction, maximum linear transparency</td><td><code>decoder/concat_all</code></td><td>Highest age R² (0.950) — easiest to audit with a simple linear layer, not just trust the trained head</td></tr>
+    <tr><td>Most reusable/generic representation</td><td><code>decoder/concat_all</code></td><td>Highest avg CKA similarity — closest to the "average" of all 6, speculative but a reasonable transfer-learning heuristic</td></tr>
+    <tr><td>Item-level prediction</td><td>None — near chance everywhere</td><td>Best head accuracy (0.167) barely clears the ~12.5% chance baseline for 8 classes</td></tr>
+  </table>
+
+  <h2>What this would mean for an actual deployment decision</h2>
+  <p>If this were a real insurance business deciding what to ship, the honest read is: <strong>there's no single
+  best config, and that's a real finding, not a non-answer.</strong> The right choice depends on what the model
+  needs to be good at and how much it needs to explain itself:</p>
+  <ul>
+    <li>Shipping one general-purpose model with the best aggregate performance → <code>encoder/concat_emb_summed</code>.</li>
+    <li>Building an age-driven risk or lapse model that also needs to survive a regulatory audit → <code>decoder/concat_all</code>, since its age signal is both the most accurate <em>and</em> the most linearly transparent — a friendlier substrate for the SHAP/LIME/counterfactual escalation path <a href="17-event-attribution.html">Lesson 17</a> already laid out, since those methods work better on cleaner structure.</li>
+    <li>Underwriting or sum-insured-focused pricing work → <code>encoder/sum</code>, the only config where that signal is genuinely, linearly present rather than buried in a nonlinear head.</li>
+    <li>An item-recommendation feature → none of the 6 are ready. Near-chance item accuracy across every config and every method (head <em>and</em> probe) is a real limitation of this mock dataset/setup, not something to paper over — it would need addressing (richer features, more data, a different task framing) before shipping.</li>
+  </ul>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — how much to trust this table</div>
+    <p>Two honesty checks before treating any of this as gospel. First, the probe numbers here were recomputed
+    fresh in this session (a new random train/test split inside <code>run_linear_probes</code> each time) — small
+    differences from Lessons 18/20's originally reported numbers are expected sampling noise, not a contradiction;
+    with <code>n_test≈23</code>, don't over-read small gaps between configs. Second, this entire study used one
+    mock dataset from one random seed — a real production decision would need this repeated across several
+    dataset regenerations before trusting any single config's "win" as robust rather than a lucky draw.</p>
+  </div>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Capstone synthesis</dt>
+    <dd>Combining results from several independently-run analyses (here: training metrics, linear probing, CKA)
+    into one comparison table — different from any single analysis, since patterns invisible within one method
+    (like the age head-vs-probe split) only appear once multiple methods are placed side by side.</dd>
+
+    <dt>Head-vs-probe divergence</dt>
+    <dd>When a trained prediction head substantially outperforms a frozen linear probe on the same target, it
+    means the head is doing real nonlinear extraction work — the information exists but isn't simply,
+    linearly available in the representation itself.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Encoder architecture wins cleanly on overall training performance (val_loss) across all 3 fusion strategies, with zero overlap against decoder.</li>
+    <li><code>concat_emb_summed</code> was the best fusion strategy for both architectures.</li>
+    <li>Age showed a dramatic head-vs-representation split: near-identical MAE at the head level, but decoder's linear age R² (0.91–0.95) totally exceeds encoder's (0.77–0.82) — plausibly because the decoder's read-out is an actual input position, getting a "free" residual pass-through the encoder's separate CLS token doesn't.</li>
+    <li>Item and sum_insure showed the reverse pattern in places: decoder's trained heads beat encoder's on raw performance while encoder's frozen representation was more linearly informative — evidence decoder relies more on nonlinear extraction for these two.</li>
+    <li>No config solved item-level prediction — every config, by every method, sat near chance. A real, honest limitation of this dataset/setup.</li>
+    <li>There's no single "best" config — the right pick depends on which target and which interpretability requirement matters most for the deployment in question.</li>
+    <li>A full extension (LOEO + UMAP run across all 6, not just 1–2) would strengthen this further but wasn't done here — a deliberate scope decision, not an oversight.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="20-cka-comparing-representations.html"><span class="dir">Back</span>Lesson 20 — CKA</a>
+    <a class="next" href="22-tensor-manipulation.html"><span class="dir">Next</span>Lesson 22 — Tensor Manipulation</a>
+  </div>
+</main>
+</body>
+</html>

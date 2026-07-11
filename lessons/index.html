@@ -35,6 +35,7 @@
       <a class="pill" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
       <a class="pill" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
       <a class="pill" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
+      <a class="pill" href="23-rope-end-to-end.html"><span class="nav-dot dot-core"></span>23 · RoPE Deep Dive</a>
     </nav>
   </div>
 </header>
@@ -43,14 +44,14 @@
   <p class="eyebrow">Study Curriculum</p>
   <h1>A Study on Transformer</h1>
   <p class="subtitle">Understanding transformer architecture inside out — not as a language model, but as a general
-  sequence-processing pattern applied to insurance customer data. Twenty-two lessons, most grounded in the actual
+  sequence-processing pattern applied to insurance customer data. Twenty-three lessons, most grounded in the actual
   code in this repo, covering two examples of the pattern applied outside insurance/NLP entirely, a multi-task
   extension of the encoder project, the real-world model (BERT) behind the CLS trick studied along the way, loss
   functions beyond plain MSE, how to read — and act on — whether any of it actually worked, where a target value
   actually comes from, a runnable proof of the guarantee that makes shift-by-one work at all, four ways to
   interrogate a model after it's already trained, a final synthesis that combines all four into one real answer,
-  and — underneath all of it — the tensor manipulation mechanics every earlier lesson used without stopping to
-  name.</p>
+  the tensor manipulation mechanics every earlier lesson used without stopping to name, and a full derivation of
+  RoPE — the rotation math, not just the intuition.</p>
 
   <h2>How to use this</h2>
   <p>Read the lessons in order the first time — each one builds on the last. After that, use the pill nav above
@@ -137,6 +138,8 @@
     <div style="text-align:center; margin: 6px 0; color: var(--text-dim); font-size: 0.85rem;">↓ the mechanics every lesson above used, named explicitly ↓</div>
     <div class="stack">
       <div class="stack-box">Lesson 22 — Tensor Manipulation<span class="sub">view/reshape, transpose/permute, squeeze/unsqueeze, broadcasting, matmul, fancy indexing, reductions — each tied to a real line you've already read</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">Lesson 23 — RoPE, End to End<span class="sub">Lesson 1's rotation formula, derived and traced shape-by-shape — why relative position falls out of the dot product</span></div>
     </div>
   </div>
 
@@ -175,6 +178,7 @@
     <tr><td>20</td><td><a href="20-cka-comparing-representations.html">CKA</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>Across all 6 trained configs, which ones learned similar representations — and which learned genuinely different ones?</td></tr>
     <tr><td>21</td><td><a href="21-final-synthesis.html">Final Synthesis</a></td><td><span class="arch-badge multi inline"><span class="dot"></span>Both</span></td><td>All four interrogation methods, all 6 configs — which one actually wins, and for what?</td></tr>
     <tr><td>22</td><td><a href="22-tensor-manipulation.html">Tensor Manipulation</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>What do <code>.view()</code>, broadcasting, <code>matmul</code>, and fancy indexing actually do, explicitly?</td></tr>
+    <tr><td>23</td><td><a href="23-rope-end-to-end.html">RoPE, End to End</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>Why does rotating Q/K instead of adding a position vector make attention relative-position aware?</td></tr>
   </table>
 
   <h2>Repo map</h2>
@@ -200,6 +204,7 @@
       <li>lesson 20 (CKA) is grounded in the same notebook once more — its representation extraction is <code>build_probe_dataset</code> from lesson 18, reused unchanged across all 6 configs</li>
       <li>lesson 21 (Final Synthesis) merges lessons 18 and 20's own dataframes/matrices with a fresh per-checkpoint metrics pull — no new extraction code, just combining what already existed</li>
       <li>lesson 22 (Tensor Manipulation) is grounded in <code>attention.ipynb</code> — a separate from-scratch attention build outside the lessons/insurance codebase entirely — plus callbacks to <code>package/encoder_block.py</code>'s RoPE broadcasting and <code>sequences_to_multiple_outcomes.ipynb</code>'s fancy indexing</li>
+      <li>lesson 23 (RoPE, End to End) walks <code>package/encoder_block.py</code>'s <code>RoPE</code> class line by line — the same class Lesson 1 introduced, now derived in full instead of just demonstrated</li>
     </ul>
   </div>
 

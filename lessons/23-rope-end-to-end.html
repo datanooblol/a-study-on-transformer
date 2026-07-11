@@ -1,0 +1,374 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 23 — RoPE, End to End</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+      <a class="pill" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
+      <a class="pill" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
+      <a class="pill" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
+      <a class="pill current" href="23-rope-end-to-end.html"><span class="nav-dot dot-core"></span>23 · RoPE Deep Dive</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 23 of 23</p>
+  <h1>RoPE, End to End</h1>
+  <p class="subtitle">Lesson 1 told you <em>what</em> RoPE does: rotate Q and K by an angle proportional to
+  position. This lesson derives <em>why</em> that works, and traces every line of the real
+  <code>RoPE</code> class — <code>theta</code> → <code>angles</code> → <code>freqs</code> → <code>forward()</code>
+  — with concrete numbers at every step, so nothing is left as "trust the formula."</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core — identical class copied into every block that uses attention</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this lesson</span>
+    <ul>
+      <li><code>package/encoder_block.py</code> — the <code>RoPE</code> class this lesson walks line by line</li>
+      <li><code>lessons/01-attention-and-rope.html</code> — the intuition and the masking half of that lesson still apply; this lesson only goes deeper on RoPE itself</li>
+      <li><code>lessons/22-tensor-manipulation.html</code> — refresher on <code>unsqueeze</code>, broadcasting, and <code>unflatten</code>/<code>flatten</code> if any shape step below feels unfamiliar</li>
+    </ul>
+  </div>
+
+  <h2>What this lesson adds beyond Lesson 1</h2>
+  <p>Lesson 1 showed the rotation formula and asserted that dot products between rotated vectors end up
+  depending on <em>relative</em> position. This lesson proves that algebraically and numerically, and walks
+  the actual tensor shapes through <code>RoPE.__init__</code> and <code>RoPE.forward</code> so you can trace
+  every line against the real file with a concrete example in hand.</p>
+
+  <h2>Step 1 — <code>theta</code>: one rotation speed per dimension pair</h2>
+  <div class="code-block">
+    <div class="file-tag">package/encoder_block.py — RoPE.__init__</div>
+    <pre><code>theta = 1.0 / (10000 ** (torch.arange(0, dim, 2).float() / dim))</code></pre>
+  </div>
+  <p><code>head_dim</code> (called <code>dim</code> here) must be even — it's about to be split into pairs of
+  dimensions, and each pair gets its own fixed rotation speed. <code>torch.arange(0, dim, 2)</code> gives the
+  pair indices <code>[0, 2, 4, ..., dim-2]</code>; dividing by <code>dim</code> and raising <code>10000</code>
+  to that power spreads the speeds across a wide geometric range — small pair-index → fast rotation, large
+  pair-index → slow rotation.</p>
+
+  <p>Concretely, for <code>dim = 8</code> (4 pairs):</p>
+  <div class="code-block">
+    <div class="file-tag">worked example — dim = 8</div>
+    <pre><code>pair index:      0        2        4        6
+exponent:      0/8=0.00  2/8=0.25  4/8=0.50  6/8=0.75
+10000^exp:        1        10       100      1000
+theta:          1.0       0.1      0.01     0.001</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">rotation speed per dimension pair — bar height = theta (radians per position step)</div>
+    <svg viewBox="0 0 300 130" width="300" height="130" style="display:block;margin:0 auto;">
+      <line x1="30" y1="110" x2="290" y2="110" stroke="var(--border)" stroke-width="1"/>
+      <rect x="45" y="14" width="34" height="96" fill="var(--accent)"/>
+      <rect x="115" y="80" width="34" height="30" fill="var(--accent-dim)"/>
+      <rect x="185" y="100" width="34" height="10" fill="var(--accent-dim)" opacity="0.7"/>
+      <rect x="255" y="107" width="34" height="3" fill="var(--accent-dim)" opacity="0.5"/>
+      <text x="62" y="124" font-size="9" text-anchor="middle" fill="var(--text-dim)">pair 0</text>
+      <text x="132" y="124" font-size="9" text-anchor="middle" fill="var(--text-dim)">pair 2</text>
+      <text x="202" y="124" font-size="9" text-anchor="middle" fill="var(--text-dim)">pair 4</text>
+      <text x="272" y="124" font-size="9" text-anchor="middle" fill="var(--text-dim)">pair 6</text>
+      <text x="62" y="10" font-size="9" text-anchor="middle" fill="var(--text)">θ=1.0</text>
+      <text x="132" y="76" font-size="9" text-anchor="middle" fill="var(--text)">θ=0.1</text>
+      <text x="202" y="96" font-size="9" text-anchor="middle" fill="var(--text)">θ=0.01</text>
+      <text x="272" y="103" font-size="9" text-anchor="middle" fill="var(--text)">θ=0.001</text>
+    </svg>
+    <p class="diagram-caption">Same idea as a clock's second/minute/hour hands: several rotation speeds running
+    at once, fast ones for fine-grained distance, slow ones for coarse, long-range distance.</p>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — why 10000?</div>
+    <p>It's the same base the original Transformer paper used for its sinusoidal positional encoding — an
+    arbitrary but reasonable choice that spreads the slowest pair's wavelength out far enough to stay
+    meaningfully distinct across long sequences, while the fastest pair still resolves adjacent positions.
+    Nothing sacred about the exact number; it's a hyperparameter that happens to have become a convention.</p>
+  </div>
+
+  <h2>Step 2 — <code>angles</code>: pairing positions with rotation speeds</h2>
+  <div class="code-block">
+    <div class="file-tag">package/encoder_block.py — RoPE.__init__</div>
+    <pre><code>positions = torch.arange(max_len).float()
+angles = torch.outer(positions, theta)   # (max_len, dim//2)</code></pre>
+  </div>
+  <p><code>torch.outer(a, b)</code> is every pairwise product: row <code>i</code>, column <code>j</code> of the
+  result is <code>a[i] * b[j]</code>. Here that means: for every position, multiply it by every pair's rotation
+  speed — how far that pair has rotated by the time you reach that position.</p>
+
+  <table class="cmp">
+    <tr><th>position</th><th>pair 0 (θ=1.0)</th><th>pair 2 (θ=0.1)</th><th>pair 4 (θ=0.01)</th><th>pair 6 (θ=0.001)</th></tr>
+    <tr><td>0</td><td>0.000</td><td>0.000</td><td>0.000</td><td>0.000</td></tr>
+    <tr><td>1</td><td>1.000</td><td>0.100</td><td>0.010</td><td>0.001</td></tr>
+    <tr><td>2</td><td>2.000</td><td>0.200</td><td>0.020</td><td>0.002</td></tr>
+    <tr><td>3</td><td>3.000</td><td>0.300</td><td>0.030</td><td>0.003</td></tr>
+    <tr><td>4</td><td>4.000</td><td>0.400</td><td>0.040</td><td>0.004</td></tr>
+  </table>
+  <p>Read a column top to bottom and you're watching one pair's angle accumulate at its own fixed speed as
+  position increases. Read a row left to right and you're seeing every pair's current angle at one fixed
+  position — the fast pair has already spun past 1 full radian by position 1, the slowest pair has barely moved.</p>
+
+  <h2>Step 3 — <code>freqs</code>: storing cos/sin as a buffer</h2>
+  <div class="code-block">
+    <div class="file-tag">package/encoder_block.py — RoPE.__init__</div>
+    <pre><code>self.register_buffer("freqs", torch.stack([angles.cos(), angles.sin()], dim=-1))
+# shape: (max_len, dim//2, 2)</code></pre>
+  </div>
+  <p>Every angle gets converted to its <code>(cos, sin)</code> pair up front — that's what the actual rotation
+  formula needs, not the raw angle. Stacking on a new last axis of size 2 turns
+  <code>(max_len, dim//2)</code> into <code>(max_len, dim//2, 2)</code>: for every position and every
+  dimension-pair, one cos and one sin, ready to use.</p>
+  <p><code>register_buffer</code> (not <code>nn.Parameter</code>) is the correct choice here: <code>freqs</code>
+  is fixed math with no gradient to learn, but it still needs to move to the right device with
+  <code>.to(device)</code> and persist correctly in <code>state_dict()</code> — exactly the "tracked but not
+  trainable" case that buffer exists for. And it's computed once at construction for the full
+  <code>max_len</code>, not recomputed every forward call — <code>forward()</code> only ever slices into it.</p>
+
+  <h2>Step 4 — <code>forward()</code>: applying the rotation, shape by shape</h2>
+  <p>Concrete running example: <code>batch=2</code>, <code>seq_len=4</code>, <code>n_heads=2</code>,
+  <code>head_dim=8</code> (the same <code>dim=8</code> from Step 1, so 4 pairs per head).</p>
+
+  <div class="code-block">
+    <div class="file-tag">package/encoder_block.py — RoPE.forward</div>
+    <pre><code>def forward(self, x: torch.Tensor) -> torch.Tensor:
+    # x: (2, 4, 2, 8)  -- (batch, seq_len, n_heads, head_dim)
+    seq_len = x.shape[1]                                  # 4
+
+    freqs = self.freqs[:seq_len].unsqueeze(0).unsqueeze(2)
+    # self.freqs[:seq_len]:            (4, 4, 2)        -- (seq_len, dim//2, 2)
+    # .unsqueeze(0):                   (1, 4, 4, 2)      -- room for batch
+    # .unsqueeze(2):                   (1, 4, 1, 4, 2)    -- room for n_heads
+
+    x_pairs = x.unflatten(-1, (-1, 2))
+    # (2, 4, 2, 8) -> (2, 4, 2, 4, 2)  -- head_dim=8 regrouped into 4 pairs of 2
+
+    x0, x1 = x_pairs[..., 0], x_pairs[..., 1]   # each: (2, 4, 2, 4)
+    cos, sin = freqs[..., 0], freqs[..., 1]     # each: (1, 4, 1, 4) -- broadcasts against x0/x1
+
+    out0 = x0 * cos - x1 * sin                  # (2, 4, 2, 4)
+    out1 = x0 * sin + x1 * cos                  # (2, 4, 2, 4)
+
+    return torch.stack([out0, out1], dim=-1).flatten(-2)
+    # stack:  (2, 4, 2, 4, 2)
+    # flatten(-2): (2, 4, 2, 8)  -- back to x's original shape</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">x</span><span class="s">(2,4,2,8)</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">unflatten</span><span class="s">(2,4,2,4,2)</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">x0, x1</span><span class="s">each (2,4,2,4)</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">rotate</span><span class="s">out0, out1</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">stack + flatten</span><span class="s">(2,4,2,8)</span></div>
+    </div>
+    <p class="diagram-caption">Same shape in, same shape out — RoPE never changes <code>head_dim</code>, it only
+    rotates values within it. The two <code>unsqueeze</code> calls on <code>freqs</code> exist purely so one
+    shared set of angles can broadcast against every batch element and every head at once, with zero copying
+    (Lesson 22's broadcasting rule, applied here).</p>
+  </div>
+
+  <h2>Worked example — rotating one pair by hand</h2>
+  <p>Take pair 0 (the fastest, <code>θ = 1.0</code>), at position 2, so the rotation angle is
+  <code>2 × 1.0 = 2</code> radians. Start with a simple pair value <code>(x0, x1) = (1.0, 0.0)</code>:</p>
+  <div class="code-block">
+    <div class="file-tag">by hand</div>
+    <pre><code>angle = 2.0
+cos, sin = cos(2.0), sin(2.0)   # ≈ -0.416, 0.909
+
+out0 = x0*cos - x1*sin = 1.0*(-0.416) - 0.0*0.909  = -0.416
+out1 = x0*sin + x1*cos = 1.0*0.909  + 0.0*(-0.416) =  0.909
+# (1.0, 0.0) -> (-0.416, 0.909)</code></pre>
+  </div>
+  <div class="diagram">
+    <svg viewBox="0 0 260 150" width="260" height="150" style="display:block;margin:0 auto;">
+      <circle cx="130" cy="75" r="55" fill="none" stroke="var(--border)" stroke-width="1" stroke-dasharray="2,3"/>
+      <line x1="20" y1="75" x2="240" y2="75" stroke="var(--border)" stroke-width="1"/>
+      <line x1="130" y1="20" x2="130" y2="130" stroke="var(--border)" stroke-width="1"/>
+      <line x1="130" y1="75" x2="185" y2="75" stroke="var(--text-dim)" stroke-width="1.5" stroke-dasharray="3,3"/>
+      <circle cx="185" cy="75" r="3" fill="var(--text-dim)"/>
+      <text x="190" y="70" font-size="9" fill="var(--text-dim)">(1.0, 0.0)</text>
+      <line x1="130" y1="75" x2="107" y2="25" stroke="var(--accent)" stroke-width="2.5"/>
+      <circle cx="107" cy="25" r="3" fill="var(--accent)"/>
+      <text x="60" y="22" font-size="9" fill="var(--accent)">(-0.416, 0.909)</text>
+      <path d="M 165 60 A 40 40 0 0 1 118 30" fill="none" stroke="var(--accent-dim)" stroke-width="1.5"/>
+      <text x="160" y="40" font-size="9" fill="var(--accent-dim)">2 rad</text>
+    </svg>
+    <p class="diagram-caption">The point rotates 2 radians (~114.6°) counter-clockwise around the origin — pure
+    rotation, magnitude unchanged (still length 1). Verify it yourself: <code>math.cos(2)**2 + math.sin(2)**2 == 1</code>.</p>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — try this in your notebook</div>
+    <p><code>import math; x0, x1 = 1.0, 0.0; angle = 2.0; c, s = math.cos(angle), math.sin(angle);
+    out0, out1 = x0*c - x1*s, x0*s + x1*c; print(out0, out1)</code> — should print the same
+    <code>-0.416..., 0.909...</code> as above. This is the exact formula <code>RoPE.forward</code> runs,
+    just for one pair by hand instead of every pair, every position, every head, at once.</p>
+  </div>
+
+  <h2>Why rotation instead of addition — the algebraic payoff</h2>
+  <p>Lesson 1 asserted that rotating Q and K makes their dot product depend only on relative position. Here's
+  why, one pair at a time. Write the rotation of a 2D pair by angle <code>a</code> as a rotation matrix
+  <code>R(a)</code>. Rotating query <code>q</code> at position <code>m</code> and key <code>k</code> at position
+  <code>n</code> by that pair's fixed speed <code>θ</code> gives:</p>
+  <div class="code-block">
+    <div class="file-tag">algebra</div>
+    <pre><code>q'_m = R(θ·m) q
+k'_n = R(θ·n) k
+
+q'_m · k'_n = q^T R(θ·m)^T R(θ·n) k</code></pre>
+  </div>
+  <p>Two facts about rotation matrices finish the proof: they're <strong>orthogonal</strong>
+  (<code>R(a)^T = R(-a)</code>, rotating backward undoes rotating forward), and they
+  <strong>compose additively</strong> (<code>R(a) R(b) = R(a+b)</code>, two rotations in a row is one combined
+  rotation). So:</p>
+  <div class="code-block">
+    <div class="file-tag">algebra, continued</div>
+    <pre><code>R(θ·m)^T R(θ·n) = R(-θ·m) R(θ·n) = R(θ·(n - m))
+
+q'_m · k'_n = q^T R(θ·(n - m)) k</code></pre>
+  </div>
+  <p>The absolute positions <code>m</code> and <code>n</code> are gone — only their <strong>difference</strong>
+  <code>n - m</code> survives. Two tokens 3 apart contribute the identical rotation to their attention score
+  whether they're at positions (2, 5) or (10, 13). This is the entire point of RoPE: relative position falls
+  out of the dot product for free, with no distance number ever explicitly computed or fed to the model.</p>
+
+  <div class="callout good">
+    <div class="callout-title">✓ Prove it yourself, numerically</div>
+    <p>Pick any 2D <code>q</code>, <code>k</code>, and <code>θ</code>. Rotate <code>q</code> by
+    <code>θ·2</code> and <code>k</code> by <code>θ·5</code> (gap of 3), then separately rotate <code>q</code> by
+    <code>θ·10</code> and <code>k</code> by <code>θ·13</code> (also a gap of 3). Both dot products come out
+    identical — same proof style as Lesson 16's shift-by-one script, just for RoPE instead.</p>
+  </div>
+  <div class="code-block">
+    <div class="file-tag">runnable in your notebook</div>
+    <pre><code>import torch
+
+def rotate(v, angle):
+    c, s = torch.cos(angle), torch.sin(angle)
+    x0, x1 = v[0], v[1]
+    return torch.tensor([x0*c - x1*s, x0*s + x1*c])
+
+q = torch.tensor([1.0, 0.5])
+k = torch.tensor([0.3, 0.8])
+theta = torch.tensor(0.3)
+
+score_a = torch.dot(rotate(q, theta*2),  rotate(k, theta*5))    # gap = 3
+score_b = torch.dot(rotate(q, theta*10), rotate(k, theta*13))   # gap = 3
+
+print(score_a, score_b)   # equal (up to floating point)</code></pre>
+  </div>
+
+  <h2>Why several speeds together, not just one</h2>
+  <p>A single rotation speed is periodic — it wraps around every <code>2π/θ</code> positions, so two tokens
+  far enough apart could rotate back to looking like they're close together for that one pair (aliasing,
+  the same problem a clock's minute hand alone can't tell 5 past the hour from 65 past). Combining many speeds
+  — fast pairs for fine local resolution, slow pairs that don't wrap within any realistic <code>max_len</code>
+  — is what makes the full <code>head_dim</code>-wide rotation an effectively unique fingerprint of relative
+  distance across the whole sequence, the same way second+minute+hour hands together uniquely identify a time
+  that any single hand alone couldn't.</p>
+
+  <h2>RoPE vs. other positional schemes</h2>
+  <table class="cmp">
+    <tr><th>Scheme</th><th>Mechanism</th><th>Encodes</th><th>Learned?</th></tr>
+    <tr><td>Sinusoidal (original Transformer)</td><td>Add a fixed sin/cos vector to the embedding, once, before any attention</td><td>Absolute position</td><td>No</td></tr>
+    <tr><td>Learned positional embedding</td><td>An <code>nn.Embedding(max_len, d_model)</code> looked up by index, added to the token embedding</td><td>Absolute position</td><td>Yes</td></tr>
+    <tr><td>RoPE</td><td>Rotate Q and K inside every attention layer, never touches the embedding or V</td><td>Relative position (falls out of the dot product)</td><td>No</td></tr>
+  </table>
+  <p>The practical edge RoPE has: relative-position information is exactly what attention actually uses ("how
+  far is this key from my query"), so RoPE delivers it directly instead of hoping the model learns to derive
+  relative position by subtracting two absolute-position signals itself.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Inconsistency / best practice — five copies of this class</div>
+    <p><code>RoPE</code> is copied verbatim into <code>encoder_block.py</code>, <code>decoder_block.py</code>,
+    <code>gpt_decoder_block.py</code>, and <code>insurance_decoder_block.py</code>, plus a fifth, slightly
+    different version in <code>rope.py</code>/<code>transformer.py</code> (used only by
+    <code>ContrastiveTransformerEncoder</code>). Deliberate readability tradeoff for a study repo — every block
+    file stays self-contained and diffable against the others — not an oversight. A production codebase would
+    share one <code>RoPE</code> module instead.</p>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — RoPE never touches V</div>
+    <p>Only Q and K get rotated. V carries the actual content being handed over once attention decides to look
+    at a token — rotating it would scramble that content for no positional benefit, since V never participates
+    in the position-sensitive dot product in the first place.</p>
+  </div>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>theta (θ)</dt>
+    <dd>The fixed rotation speed assigned to one dimension-pair — radians of rotation per one step of position.
+    Small pair-index → large θ (fast); large pair-index → small θ (slow).</dd>
+
+    <dt>angle</dt>
+    <dd><code>position × theta</code> — how far a given dimension-pair has rotated by the time you reach a
+    given position. Computed for every (position, pair) combination at once via <code>torch.outer</code>.</dd>
+
+    <dt>Rotation matrix, <code>R(a)</code></dt>
+    <dd>The 2×2 matrix <code>[[cos a, -sin a], [sin a, cos a]]</code> that rotates a 2D point by angle
+    <code>a</code>. Orthogonal (<code>R(a)^T = R(-a)</code>) and composes additively
+    (<code>R(a)R(b) = R(a+b)</code>) — both facts are what make relative-position invariance fall out of the
+    attention dot product.</dd>
+
+    <dt>Relative position invariance</dt>
+    <dd>The property that <code>q'_m · k'_n</code> depends only on <code>n - m</code>, not on <code>m</code> and
+    <code>n</code> individually — the core payoff of rotating instead of adding.</dd>
+
+    <dt><code>register_buffer</code></dt>
+    <dd>PyTorch mechanism for state that must move with the module (<code>.to(device)</code>) and persist in
+    <code>state_dict()</code>, but isn't a learnable parameter. <code>freqs</code> qualifies exactly: fixed
+    math, computed once, reused every forward call.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li><code>theta</code> assigns one fixed rotation speed per dimension-pair, spread geometrically from fast (pair 0) to slow (last pair) via the <code>10000^(pair/dim)</code> schedule.</li>
+    <li><code>angles = torch.outer(positions, theta)</code> gives every (position, pair) combination's accumulated rotation in one call.</li>
+    <li><code>freqs</code> stores <code>cos</code>/<code>sin</code> up front as a buffer — fixed, device-aware, persisted, computed once for the full <code>max_len</code>.</li>
+    <li><code>forward()</code> never changes <code>head_dim</code> — <code>unflatten</code> groups it into pairs, rotates each pair, <code>stack</code>+<code>flatten</code> puts it back exactly as it was.</li>
+    <li>Rotating Q and K (never V) makes their dot product depend only on relative position — a direct consequence of rotation matrices being orthogonal and composing additively.</li>
+    <li>Multiple speeds together avoid the aliasing a single speed would suffer at longer distances — same idea as a multi-hand clock.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="22-tensor-manipulation.html"><span class="dir">Back</span>Lesson 22 — Tensor Manipulation</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

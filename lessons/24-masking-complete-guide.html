@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 24 — Masking, Completely</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+      <a class="pill" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
+      <a class="pill" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
+      <a class="pill" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
+      <a class="pill" href="23-rope-end-to-end.html"><span class="nav-dot dot-core"></span>23 · RoPE Deep Dive</a>
+      <a class="pill current" href="24-masking-complete-guide.html"><span class="nav-dot dot-core"></span>24 · Masking</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 24 of 24</p>
+  <h1>Masking, Completely</h1>
+  <p class="subtitle">Every earlier lesson used a mask without slowing down to build the whole mental model in one
+  place — where it comes from, why <code>-inf</code>, why exactly one flip point, and how a single
+  <code>(batch, seq_len)</code> boolean tensor reaches all the way into a 4D attention score matrix. This lesson
+  is that one place, built from a real bug you hit and fixed today.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core — every architecture in this repo needs at least a padding mask</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this lesson</span>
+    <ul>
+      <li><code>src/sequences_to_multiple_outcomes/collate_functions.py</code> — <code>next_seq_collate_fn</code>, where the mask is born</li>
+      <li><code>src/sequences_to_multiple_outcomes/encoder_bock.py</code> — <code>EncoderCLS.forward</code>, threading the mask through and adding the CLS column</li>
+      <li><code>src/sequences_to_multiple_outcomes/attention.py</code> — <code>MultiHeadAttention.forward</code>, the one flip point</li>
+      <li><code>package/decoder_block.py</code> — <code>MaskedSelfAttention</code>, where a causal mask combines with a padding mask</li>
+      <li><a href="01-attention-and-rope.html">Lesson 1</a> — first introduced padding vs. causal masking; <a href="22-tensor-manipulation.html">Lesson 22</a> — broadcasting, needed for the shape-mechanics section below</li>
+    </ul>
+  </div>
+
+  <h2>The problem masking solves</h2>
+  <p>Attention has no built-in notion of "this position is fake." <code>scores = Q @ Kᵀ</code> computes a real
+  similarity number for every query-key pair — including pairs where the key is a padding position added purely
+  to make a batch rectangular. Left alone, every real token's output gets blended with noise from padding.</p>
+
+  <div class="diagram">
+    <div class="grid-label">without a mask — every token, including real ones, attends into padding</div>
+    <div class="token-row">
+      <div class="tok real">H</div>
+      <div class="tok real">H</div>
+      <div class="tok real">OPD</div>
+      <div class="tok pad">PAD</div>
+      <div class="tok pad">PAD</div>
+    </div>
+    <svg viewBox="0 0 400 60" width="400" height="60" style="display:block;margin:6px auto 0;">
+      <line x1="120" y1="10" x2="330" y2="10" stroke="var(--warn-border)" stroke-width="1.5" stroke-dasharray="3,3" marker-end="url(#arrowhead)"/>
+      <text x="225" y="6" font-size="9" text-anchor="middle" fill="var(--warn-text)">real token "OPD" attends into a PAD position — pure noise mixed into its output</text>
+      <defs><marker id="arrowhead" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--warn-border)"/></marker></defs>
+    </svg>
+    <p class="diagram-caption">Nothing here is technically broken — attention just doesn't know PAD is meaningless.
+    Masking is what tells it.</p>
+  </div>
+
+  <h2>Two genuinely different masks</h2>
+  <p>Mechanically identical (set disallowed scores to <code>-inf</code> before softmax) — they differ only in
+  <em>which</em> cells get blocked. Worth knowing both exist, even though this repo's encoder projects only need
+  the first.</p>
+
+  <div class="diagram">
+    <div class="grid-label">padding mask — same blocked columns for every row, every token can see every other real token</div>
+    <div class="matrix-wrap">
+      <div class="matrix" style="grid-template-columns: 40px repeat(4, 40px);">
+        <div class="mcell h0"></div>
+        <div class="mcell h0">T1</div><div class="mcell h0">T2</div><div class="mcell h0">T3</div><div class="mcell h0">PAD</div>
+        <div class="mcell h0">T1</div>
+        <div class="mcell h3">.4</div><div class="mcell h2">.3</div><div class="mcell h2">.3</div><div class="mcell neg">−∞</div>
+        <div class="mcell h0">T2</div>
+        <div class="mcell h2">.3</div><div class="mcell h3">.4</div><div class="mcell h2">.3</div><div class="mcell neg">−∞</div>
+        <div class="mcell h0">T3</div>
+        <div class="mcell h2">.3</div><div class="mcell h2">.3</div><div class="mcell h3">.4</div><div class="mcell neg">−∞</div>
+      </div>
+    </div>
+    <p class="diagram-caption">Blocks a whole column. Every row is blocked from the same PAD position — padding
+    is a property of the sequence, not of who's looking.</p>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">causal mask — different blocked cells per row: token i can only see positions ≤ i</div>
+    <div class="matrix-wrap">
+      <div class="matrix" style="grid-template-columns: 40px repeat(4, 40px);">
+        <div class="mcell h0"></div>
+        <div class="mcell h0">T1</div><div class="mcell h0">T2</div><div class="mcell h0">T3</div><div class="mcell h0">T4</div>
+        <div class="mcell h0">T1</div>
+        <div class="mcell h3">1.0</div><div class="mcell neg">−∞</div><div class="mcell neg">−∞</div><div class="mcell neg">−∞</div>
+        <div class="mcell h0">T2</div>
+        <div class="mcell h2">.5</div><div class="mcell h3">.5</div><div class="mcell neg">−∞</div><div class="mcell neg">−∞</div>
+        <div class="mcell h0">T3</div>
+        <div class="mcell h1">.3</div><div class="mcell h2">.3</div><div class="mcell h3">.4</div><div class="mcell neg">−∞</div>
+        <div class="mcell h0">T4</div>
+        <div class="mcell h1">.2</div><div class="mcell h1">.2</div><div class="mcell h2">.3</div><div class="mcell h3">.3</div>
+      </div>
+    </div>
+    <p class="diagram-caption">Blocks the upper triangle — the future. Only decoders need this; <code>EncoderCLS</code>
+    is bidirectional on purpose, so it never builds one.</p>
+  </div>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — both can stack</div>
+    <p><code>package/decoder_block.py</code>'s <code>MaskedSelfAttention</code> applies both, as two separate
+    <code>masked_fill</code> calls on the same score matrix — <code>triu(diagonal=1)</code> blocks the future,
+    a padding mask blocks PAD. Order between the two calls doesn't matter; both just OR their blocked cells
+    together onto the same tensor.</p>
+  </div>
+
+  <h2>Why <code>-inf</code> before softmax, specifically</h2>
+  <p>Softmax is <code>exp(score_i) / sum(exp(all scores))</code>. <code>exp(-inf) = 0</code> exactly — so a
+  masked score contributes nothing to the numerator for itself, and nothing to the denominator for anyone else.
+  It vanishes completely, and the remaining real weights renormalize to sum to 1 automatically, with no manual
+  rescaling required.</p>
+  <div class="code-block">
+    <div class="file-tag">verify it yourself</div>
+    <pre><code>scores = torch.tensor([2.0, 1.0, float("-inf")])
+scores.softmax(dim=-1)
+# tensor([0.7311, 0.2689, 0.0000])  -- real weights still sum to 1.0 exactly, masked position is exactly 0</code></pre>
+  </div>
+  <p>Two consequences worth internalizing: masking <strong>must</strong> happen before softmax, not after —
+  zeroing out a probability directly wouldn't renormalize the rest, leaving weights that don't sum to 1. And it
+  has to be <code>-inf</code> specifically (not a large negative stand-in like <code>-1e9</code>, a common but
+  inexact shortcut) — <code>-inf</code> is the only value guaranteed to <code>exp()</code> to precisely zero.</p>
+
+  <h2>The construction pipeline, step by step</h2>
+  <p>The order these six steps happen in is the entire discipline. Follow it in your own
+  <code>next_seq_collate_fn</code> / <code>EncoderCLS</code> / <code>MultiHeadAttention</code> chain.</p>
+
+  <div class="diagram">
+    <div class="stack">
+      <div class="stack-box accent">1. Know real lengths<span class="sub"><code>lengths.append(len(items))</code> — before any padding happens</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">2. Build the boolean mask, once<span class="sub"><code>arange(max_len) &lt; lengths</code> — collate_fn, single source of truth</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">3. Pick one convention, name it<span class="sub"><code>True = real</code> — documented at the point of creation</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">4. Thread it through unchanged<span class="sub">every layer just passes it along — none recompute or reinterpret it</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box">5. Handle structural extras where they're added<span class="sub">CLS column, added inside <code>EncoderCLS</code>, right beside the CLS token itself</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">6. Flip once, right before <code>masked_fill</code><span class="sub">inside <code>MultiHeadAttention</code> — the only place the convention changes</span></div>
+    </div>
+  </div>
+
+  <h2>One convention, one flip point — the bug you actually had today</h2>
+  <p>Worth keeping the before/after honest, because the "before" version wasn't broken — it trained correctly
+  for 30 epochs. The problem was purely where the flip happened.</p>
+
+  <div class="code-block">
+    <div class="file-tag">before — flip hidden inside EncoderCLS, disguised as a feature check</div>
+    <pre><code>def forward(self, categorical_features, continuous_features, pad_mask_source):
+    pad_mask = pad_mask_source == 0        # looks like "check a raw feature for zero"
+    cls_col = torch.zeros(batch, 1, ...)    # only correct because of the flip that just happened
+    ...</code></pre>
+  </div>
+  <div class="code-block">
+    <div class="file-tag">after — pass-through everywhere, flip only in MultiHeadAttention</div>
+    <pre><code># EncoderCLS.forward — no flip, no re-derivation
+def forward(self, categorical_features, continuous_features, pad_mask):
+    cls_col = torch.ones(batch, 1, ...)     # CLS is real -> True, matches the un-flipped convention
+    pad_mask = torch.cat([cls_col, pad_mask], dim=1)
+    ...
+
+# MultiHeadAttention.forward — the one and only flip
+scores = scores.masked_fill(~mask[:, None, None, :], float("-inf"))</code></pre>
+  </div>
+  <p>Both versions produce the <em>identical</em> final boolean pattern fed into <code>masked_fill</code> — same
+  numeric training result either way. What changed is readability and blast radius: the old version's
+  <code>== 0</code> looked like it was deriving something from raw data (an anti-pattern in its own right — see
+  Lesson 24's construction pipeline, step 1), and it meant every module downstream of <code>EncoderCLS</code>
+  silently had to know the mask arrived pre-flipped. One flip point means only one function in the entire
+  codebase ever needs to think about which convention <code>masked_fill</code> wants.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Anti-pattern — deriving padding from a feature's value</div>
+    <p>Checking <code>feature == 0</code> to guess "is this padding" is fragile the moment that feature is a
+    normalized, real-valued signal (a z-scored age can legitimately land on exactly <code>0.0</code> at a real
+    position). Always derive the mask from actual sequence lengths, computed before padding — never from
+    whether a downstream feature happens to look like zero.</p>
+  </div>
+
+  <h2>Shape mechanics — a 2D mask reaching into 4D scores</h2>
+  <p>The mask is <code>(batch, seq_len)</code> — one bit per token. Attention scores are
+  <code>(batch, n_heads, seq_len, seq_len)</code> — every query position's score against every key position, per
+  head. Broadcasting bridges the gap, in <code>mask[:, None, None, :]</code>:</p>
+  <div class="code-block">
+    <div class="file-tag">shape trace</div>
+    <pre><code>mask:                  (batch, seq_len)
+mask[:, None, None, :]: (batch, 1, 1, seq_len)
+scores:                (batch, n_heads, seq_len, seq_len)</code></pre>
+  </div>
+  <p>Aligning from the right (Lesson 22's broadcasting rule): the last axis (<code>seq_len</code>) matches
+  exactly — "which key positions are blocked." The two inserted size-1 axes stretch to <code>n_heads</code> and
+  the query's own <code>seq_len</code> — meaning the identical padding pattern applies to every head and every
+  query row, which is exactly correct: padding is a property of the sequence, not of which head or which query
+  token is doing the looking.</p>
+
+  <h2>CLS and the mask — handled exactly where CLS is added</h2>
+  <p>CLS is a model-level concept — an <code>nn.Parameter</code>, never something the collate_fn knows about.
+  So its mask entry has to be added at the exact point CLS itself gets concatenated onto the sequence, inside
+  <code>EncoderCLS.forward</code>, never earlier:</p>
+  <div class="diagram">
+    <div class="grid-label">before → after CLS is prepended (mask and sequence grow together, in the same function)</div>
+    <div class="token-row">
+      <div class="tok real">H</div><div class="tok real">H</div><div class="tok real">OPD</div><div class="tok pad">PAD</div><div class="tok pad">PAD</div>
+    </div>
+    <div style="text-align:center;color:var(--text-dim);font-size:0.85rem;margin:6px 0;">↓ <code>torch.cat([cls, x], dim=1)</code> + <code>torch.cat([cls_col, pad_mask], dim=1)</code> ↓</div>
+    <div class="token-row">
+      <div class="tok cls">CLS</div><div class="tok real">H</div><div class="tok real">H</div><div class="tok real">OPD</div><div class="tok pad">PAD</div><div class="tok pad">PAD</div>
+    </div>
+    <p class="diagram-caption">CLS's mask bit is always <code>True</code> (real) — it should never be blocked from
+    attending or being attended to, since collecting information from every real token is its entire job.</p>
+  </div>
+
+  <h2>Where else masking silently matters</h2>
+  <p>Attention is the main place, but not the only one in general: <strong>any operation that aggregates across
+  the sequence axis</strong> needs to know about padding. <code>EncoderCLS</code> sidesteps this cleanly — CLS
+  pooling means the model learns to ignore padding entirely through masked attention, so no second, separate
+  masked-reduction step is needed anywhere else in the model.</p>
+  <div class="code-block">
+    <div class="file-tag">the gotcha this avoids</div>
+    <pre><code># if pooling were mean instead of CLS:
+x.mean(dim=1)              # WRONG -- divides by the PADDED length, silently diluted by zeros
+(x * mask.unsqueeze(-1)).sum(dim=1) / lengths.unsqueeze(-1)   # correct, but now a second place to get right</code></pre>
+  </div>
+  <p>This is a real reason CLS-style pooling is preferred over mean-pooling in practice: it pushes the entire
+  masking responsibility into attention — which you've already gotten right, once — rather than requiring a
+  second, independent masked-reduction implementation to also get right.</p>
+
+  <h2>Cheat sheet</h2>
+  <table class="cmp">
+    <tr><th>Question</th><th>Where the answer lives</th></tr>
+    <tr><td>Where do real lengths come from?</td><td>Computed before padding, from the raw data — never guessed from a feature's value</td></tr>
+    <tr><td>How many boolean conventions exist in this codebase?</td><td>Exactly one, named and documented at the point the mask is created</td></tr>
+    <tr><td>Does any intermediate layer recompute the mask?</td><td>No — every layer between creation and use just passes it through unchanged</td></tr>
+    <tr><td>Where does the convention flip?</td><td>Exactly once — immediately before <code>masked_fill</code>, inside attention</td></tr>
+    <tr><td>Where does a structural token's mask entry get added?</td><td>Exactly where that token itself gets added to the sequence (e.g. CLS, inside <code>EncoderCLS</code>)</td></tr>
+    <tr><td>Does any pooling/aggregation step need its own masking?</td><td>Only if it isn't CLS-based attention pooling — mean/sum pooling needs an explicit masked average</td></tr>
+  </table>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Padding mask</dt>
+    <dd>Blocks attention <em>to</em> padding positions. Same blocked columns for every query row — padding is a
+    property of the sequence, not of who's attending.</dd>
+
+    <dt>Causal mask</dt>
+    <dd>Blocks attention to <em>future</em> positions. Different blocked cells per row — token <code>i</code>
+    can see positions <code>0..i</code> only. Needed by decoders, not by bidirectional encoders like
+    <code>EncoderCLS</code>.</dd>
+
+    <dt>Convention flip point</dt>
+    <dd>The single location in a codebase where a boolean mask's meaning (<code>True=real</code> vs.
+    <code>True=PAD</code>) is allowed to invert. Should be exactly one — inside the attention module, right
+    before <code>masked_fill</code> — never scattered across multiple layers.</dd>
+
+    <dt>Masked pooling</dt>
+    <dd>Any sequence-aggregating operation (mean, sum) that must explicitly account for padding, since it isn't
+    protected by attention's own masking the way CLS pooling is.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>A mask is a boolean tensor derived from real sequence lengths — never from checking whether a feature happens to equal a sentinel value.</li>
+    <li><code>-inf</code> before softmax, not after — <code>exp(-inf)=0</code> makes masked weights vanish and the rest renormalize automatically.</li>
+    <li>Pick exactly one convention (<code>True=real</code> or <code>True=PAD</code>), document it once, and never let it silently flip more than once across the whole pipeline.</li>
+    <li>A 2D <code>(batch, seq_len)</code> mask reaches 4D attention scores via <code>mask[:, None, None, :]</code> — the same pattern applies to every head and every query row.</li>
+    <li>Structural tokens (CLS, and any future SOS/EOS) get their mask entry added exactly where they themselves get added to the sequence — never earlier.</li>
+    <li>Padding mask ≠ causal mask — mechanically identical (<code>masked_fill</code> + <code>-inf</code>), but blocking different cells; both can stack on the same score matrix.</li>
+    <li>Any non-attention pooling across the sequence axis (mean, sum) needs its own explicit masking — CLS pooling is one of the reasons it's preferred, since it avoids a second place to get this right.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="23-rope-end-to-end.html"><span class="dir">Back</span>Lesson 23 — RoPE, End to End</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

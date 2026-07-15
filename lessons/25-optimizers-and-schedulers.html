@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 25 — Optimizers &amp; Schedulers: Getting a Transformer to Converge</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+      <a class="pill" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
+      <a class="pill" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
+      <a class="pill" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
+      <a class="pill" href="23-rope-end-to-end.html"><span class="nav-dot dot-core"></span>23 · RoPE Deep Dive</a>
+      <a class="pill" href="24-masking-complete-guide.html"><span class="nav-dot dot-core"></span>24 · Masking</a>
+      <a class="pill current" href="25-optimizers-and-schedulers.html"><span class="nav-dot dot-core"></span>25 · Optimizers &amp; Schedulers</a>
+      <a class="pill" href="26-uncertainty-weighted-loss.html"><span class="nav-dot dot-core"></span>26 · Uncertainty Weighting</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 25 of 26</p>
+  <h1>Optimizers &amp; Schedulers: Getting a Transformer to Converge</h1>
+  <p class="subtitle">Every lesson before this one built the model. None of them asked how to actually get one to
+  train well. This lesson is the layer between "I understand what a transformer is" and "I can reliably get one
+  to converge" — AdamW's mechanics, why transformers specifically need warmup, cosine decay, and how to validate
+  a learning rate for your own model instead of trusting a borrowed constant.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core — applies to every architecture and every project in this repo</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this lesson</span>
+    <ul>
+      <li><code>notebooks/learning_scheduler.ipynb</code> — <code>get_cosine_schedule_with_warmup</code>, the hand-rolled <code>LambdaLR</code> this whole lesson traces</li>
+      <li><a href="04-datasets-and-pipelines.html">Lesson 4</a> — <code>Dataset</code>/<code>DataLoader</code>/<code>collate_fn</code> wiring; this lesson assumes that plumbing and focuses on what happens once batches start arriving</li>
+    </ul>
+  </div>
+
+  <h2>What this lesson covers, and what it doesn't</h2>
+  <p>This spans four overlapping subtopics: optimizer theory (what Adam's <code>beta1</code>/<code>beta2</code>
+  actually track, why AdamW decouples weight decay), learning-rate scheduling (warmup + cosine decay, why
+  transformers specifically need warmup), where hyperparameter defaults like <code>3e-4</code> or
+  <code>(0.9, 0.98)</code> actually come from, and how to validate them for your own model rather than trusting
+  convention. Data pipeline mechanics (<code>Dataset</code>/<code>DataLoader</code>/<code>collate_fn</code>) is
+  real plumbing this all sits on top of, but it's already covered in Lesson 4 — not repeated here.</p>
+
+  <h2>1. What Adam is actually tracking</h2>
+  <p>Plain SGD updates a parameter by its raw gradient, scaled by one global learning rate — every parameter,
+  every step, same treatment. Adam keeps two extra running estimates <em>per parameter</em> instead:</p>
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">gradient g_t</span><span class="s">this step's raw signal</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">m_t (1st moment)</span><span class="s">EMA of g_t — momentum, controlled by β1</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">v_t (2nd moment)</span><span class="s">EMA of g_t² — magnitude, controlled by β2</span></div>
+    </div>
+    <p class="diagram-caption"><code>m_t</code> answers "which direction has this parameter been consistently
+    pushed?" — <code>v_t</code> answers "how large/noisy have this parameter's gradients typically been?"</p>
+  </div>
+  <div class="code-block">
+    <div class="file-tag">Adam's update, per parameter, per step</div>
+    <pre><code>m_t = β1 * m_{t-1} + (1 - β1) * g_t          # momentum
+v_t = β2 * v_{t-1} + (1 - β2) * g_t**2        # magnitude tracker
+
+m_hat = m_t / (1 - β1**t)                      # bias correction -- m_0=0, so early estimates are biased low
+v_hat = v_t / (1 - β2**t)
+
+param -= lr * m_hat / (sqrt(v_hat) + eps)      # the actual update</code></pre>
+  </div>
+  <p>The payoff of <code>v_t</code>: dividing by <code>sqrt(v_hat)</code> makes the effective step size
+  <em>adaptive per parameter</em> — a parameter with consistently large gradients gets its step shrunk (it's
+  already moving fast, no need to push harder), a parameter with small/noisy gradients gets relatively more
+  room to move. This is the entire reason Adam-family optimizers tend to need less manual per-parameter tuning
+  than plain SGD.</p>
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — why bias correction exists</div>
+    <p><code>m_0</code> and <code>v_0</code> both start at exactly <code>0</code>, so early estimates are
+    artificially pulled toward zero before enough steps have accumulated real signal. Dividing by
+    <code>(1 - β^t)</code> — a factor that starts near <code>0</code> and rises toward <code>1</code> as
+    <code>t</code> grows — inflates the early estimates back to their true scale. By the time <code>t</code> is
+    large, <code>β^t → 0</code> and the correction becomes a no-op.</p>
+  </div>
+
+  <h2>2. AdamW — decoupling weight decay</h2>
+  <p>Weight decay's goal is simple: shrink every weight a little each step, independent of the gradient,
+  as a regularizer. Original Adam implements it by adding <code>weight_decay * param</code> directly into the
+  gradient <code>g_t</code> before anything else happens — which means the decay term gets divided by
+  <code>sqrt(v_hat)</code> too, exactly like the real gradient. A parameter with large, noisy gradients ends up
+  <em>decayed less</em> than intended; a parameter with small gradients gets decayed <em>more</em>. The
+  regularization strength ends up entangled with gradient statistics it was never supposed to depend on.</p>
+  <div class="code-block">
+    <div class="file-tag">Adam (L2-via-gradient) vs. AdamW (decoupled)</div>
+    <pre><code># Adam: decay folded into the gradient, then divided by sqrt(v_hat) along with everything else
+g_t = grad + weight_decay * param
+... (m_t, v_t, bias correction as before, using this g_t)
+param -= lr * m_hat / (sqrt(v_hat) + eps)
+
+# AdamW: decay applied directly to the weights, completely separate from the adaptive update
+... (m_t, v_t, bias correction using the REAL gradient only)
+param -= lr * m_hat / (sqrt(v_hat) + eps)
+param -= lr * weight_decay * param            # <- decoupled: same shrinkage for every parameter</code></pre>
+  </div>
+  <p>That's the whole difference the "W" stands for. It's why <code>torch.optim.AdamW</code>, not
+  <code>torch.optim.Adam</code>, is the default choice whenever weight decay matters at all — which for a
+  transformer of any real size, it does.</p>
+
+  <h2>3. Why transformers specifically need warmup</h2>
+  <p><code>v_0 = 0</code>, so <code>v_hat</code> in the first handful of steps is estimated from very little
+  data — noisy, and often too small, which makes <code>lr / sqrt(v_hat)</code> spike far larger than intended
+  right at the very start of training, before the estimate has had time to settle. Transformers are especially
+  exposed to this: attention and the residual stream compound gradient scale across many stacked layers, and
+  with random initialization, the first few steps can already be operating on a fragile, poorly-scaled loss
+  surface. An oversized early update can knock the model into a bad region it never fully recovers from.</p>
+  <p><strong>Warmup</strong> is the fix: start the learning rate at (near) zero and ramp it up linearly over the
+  first few hundred/thousand steps, giving Adam's <code>v_hat</code> estimate time to stabilize before the
+  learning rate reaches full strength. This isn't a theoretical nicety — the original "Attention is All You
+  Need" paper's own optimizer schedule included it, and training transformers without it is a well-known way to
+  watch loss diverge or plateau badly in the first few hundred steps.</p>
+
+  <h2>4. Cosine decay, traced through your own code</h2>
+  <p>After warmup, the learning rate doesn't stay flat — it decays smoothly toward a floor, following a cosine
+  curve rather than a straight line or a sudden step down. Here's the actual function from
+  <code>learning_scheduler.ipynb</code>:</p>
+  <div class="code-block">
+    <div class="file-tag">notebooks/learning_scheduler.ipynb — get_cosine_schedule_with_warmup</div>
+    <pre><code>def lr_lambda(current_step):
+    if current_step < num_warmup_steps:
+        return current_step / max(1, num_warmup_steps)          # linear ramp: 0 -> 1
+
+    progress = (current_step - num_warmup_steps) / max(1, num_training_steps - num_warmup_steps)
+    progress = min(progress, 1.0)
+    cosine_decay = 0.5 * (1.0 + math.cos(math.pi * num_cycles * 2.0 * progress))
+    return max(min_lr_ratio, cosine_decay)</code></pre>
+  </div>
+  <p>Your own run used <code>num_epochs=100</code>, <code>len(train_loader)=3</code> (5 samples, batch size 2 —
+  <code>ceil(5/2)=3</code> batches per epoch), giving <code>num_training_steps=300</code> and
+  <code>num_warmup_steps=15</code> (5%). With <code>num_cycles=0.5</code>, the cosine term simplifies to
+  <code>0.5 * (1 + cos(π · progress))</code> — a single smooth half-period, descending from <code>1.0</code> down
+  to <code>0.0</code>, never oscillating back up:</p>
+  <table class="cmp">
+    <tr><th>Step</th><th>Phase</th><th>LR ratio</th><th>Why</th></tr>
+    <tr><td>0</td><td>warmup</td><td>0.00</td><td><code>0/15</code></td></tr>
+    <tr><td>7</td><td>warmup</td><td>~0.47</td><td><code>7/15</code></td></tr>
+    <tr><td>15</td><td>decay start</td><td>1.00</td><td>warmup ends; <code>progress=0 → cos(0)=1</code></td></tr>
+    <tr><td>157</td><td>decay midpoint</td><td>0.50</td><td><code>progress≈0.5 → cos(π/2)=0</code></td></tr>
+    <tr><td>300</td><td>decay end</td><td>0.00</td><td><code>progress=1 → cos(π)=-1</code></td></tr>
+  </table>
+  <div class="diagram">
+    <div class="grid-label">the actual LR curve this run followed</div>
+    <svg viewBox="0 0 340 140" width="340" height="140" style="display:block;margin:0 auto;">
+      <line x1="30" y1="120" x2="320" y2="120" stroke="var(--border)" stroke-width="1"/>
+      <line x1="30" y1="10" x2="30" y2="120" stroke="var(--border)" stroke-width="1"/>
+      <text x="10" y="14" font-size="9" fill="var(--text-dim)">1.0</text>
+      <text x="10" y="122" font-size="9" fill="var(--text-dim)">0.0</text>
+      <text x="28" y="133" font-size="9" fill="var(--text-dim)" text-anchor="middle">0</text>
+      <text x="45" y="133" font-size="9" fill="var(--text-dim)" text-anchor="middle">15</text>
+      <text x="320" y="133" font-size="9" fill="var(--text-dim)" text-anchor="end">300</text>
+      <path d="M 30 120 L 45 15" stroke="var(--accent)" stroke-width="2.5" fill="none"/>
+      <path d="M 45 15 C 120 15, 160 20, 182 62 S 260 118, 320 120" stroke="var(--accent)" stroke-width="2.5" fill="none"/>
+      <line x1="45" y1="15" x2="45" y2="120" stroke="var(--text-dim)" stroke-width="1" stroke-dasharray="2,3"/>
+      <text x="45" y="10" font-size="8" fill="var(--text-dim)" text-anchor="middle">warmup ends</text>
+    </svg>
+    <p class="diagram-caption">Linear ramp for 15 steps (5% of training), then a smooth cosine descent across the
+    remaining 285 — steep in the middle, shallow near both ends, landing exactly at 0 on the last step.</p>
+  </div>
+  <p>Why cosine instead of linear decay: a straight line spends equal time at every learning rate. Cosine spends
+  <em>more</em> time near the peak (giving the model longer at a productive learning rate before backing off)
+  and <em>more</em> time near the floor (a longer, gentler fine-tuning tail at the end) — the steepest drop-off
+  happens in the middle, where the model has already benefited from a while at high LR and can afford to move
+  through the middle range quickly.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ Gotcha — step the scheduler every batch, not every epoch</div>
+    <p>Your training loop calls <code>scheduler.step()</code> inside the inner batch loop, once per
+    <code>optimizer.step()</code> — matching how <code>num_training_steps</code> was computed
+    (<code>num_epochs * len(train_loader)</code>, i.e. counting <em>batches</em>, not epochs). If you moved
+    <code>scheduler.step()</code> outside to the epoch loop by mistake, the schedule would desync — the model
+    would still be in "warmup" 3× longer than intended (100 epoch-steps instead of 300 batch-steps), and the
+    whole curve would stretch out silently, with no error thrown.</p>
+  </div>
+
+  <h2>5. Where the defaults actually come from</h2>
+  <p>Every one of these numbers in your notebook is a convention someone found worked well, not a value derived
+  from first principles for your specific model:</p>
+  <table class="cmp">
+    <tr><th>Value</th><th>Where it comes from</th></tr>
+    <tr><td><code>lr = 3e-4</code></td><td>Nicknamed the "Karpathy constant" — Andrej Karpathy tweeted it's "the best learning rate for Adam, hands down." A genuinely good empirical starting point for many small-to-medium models, not a theoretical result.</td></tr>
+    <tr><td><code>betas = (0.9, 0.98)</code></td><td>GPT-family convention — a slightly lower <code>β2</code> than Adam's original default (<code>0.999</code>) lets the second-moment estimate track recent gradient statistics a bit more responsively, found empirically to suit transformer training dynamics well when paired with warmup.</td></tr>
+    <tr><td><code>weight_decay = 0.1</code></td><td>Also a GPT-style convention — noticeably higher than the more everyday default of <code>0.01</code>, reflecting how much regularization large transformers tend to need.</td></tr>
+  </table>
+  <p>All three are credible <em>starting points</em>, borrowed because they've worked for models broadly similar
+  in shape to yours — not because they're provably optimal for your exact architecture, dataset, and batch
+  size. Treat them as where you start tuning from, not where you stop.</p>
+
+  <h2>6. Validating a learning rate for your own model — the LR range test</h2>
+  <p>Not in your notebook yet, but this is the actual answer to "how do I know <code>3e-4</code> is right for
+  <em>my</em> model": run a short warm-up training pass where the learning rate increases exponentially every
+  step (not the schedule you'll actually train with — just a diagnostic probe), and plot the loss against the
+  learning rate on a log scale.</p>
+  <div class="code-block">
+    <div class="file-tag">sketch — not yet in your notebook</div>
+    <pre><code>lrs, losses = [], []
+lr = 1e-7
+for X, y in probe_loader:                 # a handful of steps is enough, doesn't need to finish an epoch
+    for g in optimizer.param_groups:
+        g["lr"] = lr
+    optimizer.zero_grad()
+    loss = F.mse_loss(model(X), y)
+    loss.backward()
+    optimizer.step()
+    lrs.append(lr)
+    losses.append(loss.item())
+    lr *= 1.3                              # exponential increase, e.g. ~1e-7 -> ~10 over a few hundred steps
+    if loss.item() > 4 * min(losses): break   # stop once it's clearly diverging</code></pre>
+  </div>
+  <div class="diagram">
+    <div class="grid-label">what the resulting plot looks like — loss (y) vs. learning rate, log scale (x)</div>
+    <svg viewBox="0 0 340 130" width="340" height="130" style="display:block;margin:0 auto;">
+      <line x1="30" y1="110" x2="320" y2="110" stroke="var(--border)" stroke-width="1"/>
+      <line x1="30" y1="10" x2="30" y2="110" stroke="var(--border)" stroke-width="1"/>
+      <text x="10" y="14" font-size="9" fill="var(--text-dim)">loss</text>
+      <text x="300" y="125" font-size="9" fill="var(--text-dim)">lr →</text>
+      <path d="M 30 60 C 80 62, 120 60, 150 45 S 220 15, 240 20 S 280 60, 310 100" stroke="var(--accent)" stroke-width="2.5" fill="none"/>
+      <line x1="150" y1="10" x2="150" y2="110" stroke="var(--good-border)" stroke-width="1.5" stroke-dasharray="3,3"/>
+      <text x="150" y="122" font-size="8" fill="var(--good-text)" text-anchor="middle">steepest decline</text>
+      <line x1="240" y1="10" x2="240" y2="110" stroke="var(--warn-border)" stroke-width="1.5" stroke-dasharray="3,3"/>
+      <text x="240" y="122" font-size="8" fill="var(--warn-text)" text-anchor="middle">starts diverging</text>
+    </svg>
+    <p class="diagram-caption">Loss stays flat while LR is too small to matter, drops fastest somewhere in the
+    middle, then shoots up once LR is too large to be stable. A good peak LR is roughly one order of magnitude
+    below where the divergence starts — comfortably inside the productive region, not right at its edge.</p>
+  </div>
+  <p>This is the concrete alternative to trusting <code>3e-4</code> blindly: run this once against your actual
+  model and actual data (a few hundred steps is enough, no need to wait for a full epoch), read the LR off the
+  plot where loss falls fastest, and use that as your schedule's peak — the same <code>num_warmup_steps</code>/
+  <code>num_training_steps</code> cosine shape from Section 4 still applies, just anchored to a peak LR you
+  actually measured instead of borrowed.</p>
+
+  <h2>The recipe to carry forward</h2>
+  <ul>
+    <li>Default to <code>AdamW</code>, not <code>Adam</code>, whenever weight decay matters — which for a transformer of any real size, it does.</li>
+    <li><code>(0.9, 0.999)</code> is Adam's safe general default; <code>(0.9, 0.98)</code> is the transformer-specific convention, meant to pair with warmup.</li>
+    <li>Always warmup before training a transformer from scratch — typically 1–10% of total steps — regardless of which decay shape follows it.</li>
+    <li>Step the scheduler once per optimizer step (per batch), matching however <code>num_training_steps</code> was actually counted — check this explicitly, it's a silent desync otherwise.</li>
+    <li>Cosine decay down to a small floor (<code>min_lr_ratio</code>) rather than exactly <code>0</code> if you might continue training later — hitting exactly zero can make resuming awkward.</li>
+    <li>Treat borrowed constants (<code>3e-4</code>, <code>(0.9,0.98)</code>, <code>0.1</code>) as informed starting points, not answers — run an LR range test on your actual model before trusting one for a real training run.</li>
+  </ul>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>First moment (<code>m_t</code>)</dt>
+    <dd>An exponential moving average of the raw gradient, controlled by <code>β1</code>. This is what gives
+    Adam its "momentum" — direction that's been consistent recently gets reinforced.</dd>
+
+    <dt>Second moment (<code>v_t</code>)</dt>
+    <dd>An exponential moving average of the <em>squared</em> gradient, controlled by <code>β2</code>. Tracks
+    typical gradient magnitude per parameter, used to adaptively scale each parameter's effective step size.</dd>
+
+    <dt>Bias correction</dt>
+    <dd>Dividing <code>m_t</code>/<code>v_t</code> by <code>(1 - β^t)</code> to counteract both being initialized
+    at zero — without it, early-step estimates would be artificially small.</dd>
+
+    <dt>Decoupled weight decay</dt>
+    <dd>AdamW's core change — weight decay is subtracted from parameters directly, never passed through the
+    adaptive <code>sqrt(v_hat)</code> scaling the real gradient goes through.</dd>
+
+    <dt>Warmup</dt>
+    <dd>A linear ramp of the learning rate from (near) zero up to its target value over the first portion of
+    training, giving <code>v_hat</code> time to become a reliable estimate before the LR reaches full strength.</dd>
+
+    <dt>Cosine annealing</dt>
+    <dd>A smooth, half-cosine-shaped decay of the learning rate from its peak down to a floor — shallow near
+    both ends, steepest in the middle.</dd>
+
+    <dt>LR range test</dt>
+    <dd>A short diagnostic run where the learning rate increases exponentially every step while loss is logged,
+    used to read off a good peak learning rate for a specific model and dataset instead of guessing.</dd>
+  </dl>
+
+  <div class="lesson-footer">
+    <a href="24-masking-complete-guide.html"><span class="dir">Back</span>Lesson 24 — Masking, Completely</a>
+    <a class="next" href="26-uncertainty-weighted-loss.html"><span class="dir">Next</span>Lesson 26 — Uncertainty-Weighted Multi-Task Loss →</a>
+  </div>
+</main>
+</body>
+</html>

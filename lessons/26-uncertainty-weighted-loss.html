@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 26 — Uncertainty-Weighted Multi-Task Loss</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+      <a class="pill" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
+      <a class="pill" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
+      <a class="pill" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
+      <a class="pill" href="23-rope-end-to-end.html"><span class="nav-dot dot-core"></span>23 · RoPE Deep Dive</a>
+      <a class="pill" href="24-masking-complete-guide.html"><span class="nav-dot dot-core"></span>24 · Masking</a>
+      <a class="pill" href="25-optimizers-and-schedulers.html"><span class="nav-dot dot-core"></span>25 · Optimizers &amp; Schedulers</a>
+      <a class="pill current" href="26-uncertainty-weighted-loss.html"><span class="nav-dot dot-core"></span>26 · Uncertainty Weighting</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 26 of 26</p>
+  <h1>Uncertainty-Weighted Multi-Task Loss</h1>
+  <p class="subtitle">Kendall, Gal &amp; Cipolla, 2018 — the paper behind <code>UncertaintyWeightedLoss</code> in
+  both <code>train_insurance.py</code> and <code>train_insurance_representation_for_multi_tasks.py</code>. This
+  lesson derives it from scratch, proves the exact mechanism that makes it work with real calculus and real
+  numbers, and connects every step back to the two implementations already living in this repo.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core — applies to any multi-task head, in this repo or elsewhere</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this lesson</span>
+    <ul>
+      <li><code>train_insurance.py</code> — dict-keyed <code>UncertaintyWeightedLoss</code>, 1 classification + 2 regression tasks</li>
+      <li><code>train_insurance_representation_for_multi_tasks.py</code> — list-keyed version, 4 regression-only tasks</li>
+      <li><code>src/sequences_to_multiple_outcomes/loss_functions.py</code> — the version used in this session's hand-built encoder, mixing both task types with the exact branch shown below</li>
+      <li><a href="10-multi-task-encoder.html">Lesson 10</a> — where this loss is first used, at the model level</li>
+    </ul>
+  </div>
+
+  <h2>The problem: whose loss gets to matter?</h2>
+  <p>A multi-task model produces several losses per batch — say, an item-classification cross-entropy around
+  <code>2.0</code>, an age-regression MSE around <code>1.5</code>, and a price-regression MSE that could be in
+  the thousands if unnormalized. Add them together naively and the largest-scale task dominates every gradient
+  step; the others barely get to influence the shared backbone at all. Hand-picking fixed weights to fix this is
+  brittle — it has to be re-tuned every time a task's scale, difficulty, or dataset changes.</p>
+
+  <h2>The core idea: let the model learn how much to trust each task</h2>
+  <p>Treat each task's prediction as coming from a probability distribution with its own <strong>learnable
+  variance</strong> <code>σ²</code> — a per-task "how noisy is this output, really" parameter, trained
+  alongside everything else via ordinary backprop. Instead of hand-picking weights, take the
+  <strong>negative log-likelihood</strong> of that distribution as the loss — the weighting falls out of the math
+  automatically.</p>
+
+  <h2>Deriving the regression term — the Gaussian case</h2>
+  <p>Assume the model's prediction <code>ŷ</code> is the mean of a Gaussian, with task-specific variance
+  <code>σ²</code>:</p>
+  <div class="code-block">
+    <div class="file-tag">step by step</div>
+    <pre><code>p(y | ŷ, σ²) = 1/√(2πσ²) · exp( -(y-ŷ)² / (2σ²) )
+
+-log p(y | ŷ, σ²) = -log( 1/√(2πσ²) ) + (y-ŷ)² / (2σ²)
+                   = ½ log(2πσ²) + (y-ŷ)² / (2σ²)
+                   = ½ log(2π) + ½ log(σ²) + (y-ŷ)² / (2σ²)     <- constant term drops (no learnable params in it)
+
+NLL  ∝  (1/(2σ²)) · (y-ŷ)²  +  ½ log(σ²)
+     =  (1/(2σ²)) · L_mse   +  ½ log(σ²)</code></pre>
+  </div>
+  <p>Two pieces, and both matter: a <strong>precision-scaled error term</strong> — divide the raw squared error
+  by <code>2σ²</code>, so a task the model considers noisy (large <code>σ²</code>) gets its error term shrunk —
+  and a <strong>regularizer</strong>, <code>½ log(σ²)</code>, that penalizes claiming unlimited confidence
+  (<code>σ²→0</code>) without actually reducing the error. Without that second term, the model could trivially
+  "cheat" by driving every <code>σ²</code> to zero and ignoring the error entirely.</p>
+
+  <h2>The classification term — same shape, different distribution</h2>
+  <p>For a classification head, Kendall et al. scale the softmax logits by <code>1/σ²</code> (a temperature) and
+  take the negative log-likelihood of that scaled softmax against the true class. The derivation involves an
+  approximation of the softmax's normalizing constant that's less clean to reproduce exactly here, but the
+  resulting shape is directly analogous to the regression case:</p>
+  <div class="code-block">
+    <div class="file-tag">classification NLL, approximate form</div>
+    <pre><code>L  ≈  (1/σ²) · L_crossentropy  +  log(σ)</code></pre>
+  </div>
+  <p>Same two-part structure — precision-scaled error, plus a regularizer that grows as claimed confidence
+  increases — just derived from a categorical likelihood instead of a Gaussian one, and without the clean
+  factor-of-two that falls out of the Gaussian PDF's own exponent.</p>
+
+  <h2>Why <code>log_var</code>, never <code>σ²</code> directly</h2>
+  <p>Every implementation parameterizes <code>log(σ²)</code> as the actual <code>nn.Parameter</code> — not
+  <code>σ²</code> itself:</p>
+  <div class="code-block">
+    <div class="file-tag">src/sequences_to_multiple_outcomes/loss_functions.py</div>
+    <pre><code>self.log_vars = nn.Parameter(torch.zeros(len(task_types)))
+...
+precision = torch.exp(-self.log_vars[i])   # = 1/σ², recovered from log_var</code></pre>
+  </div>
+  <p>Two reasons: <code>σ²</code> must stay strictly positive, and an unconstrained parameter can't guarantee
+  that — gradient descent could push a raw <code>σ²</code> parameter negative, which is nonsensical (variance
+  can't be negative). Optimizing in log-space sidesteps the constraint entirely: <code>log_var</code> can be any
+  real number, and <code>exp(log_var)</code> is guaranteed positive no matter what. It's also numerically
+  friendlier — multiplying/dividing by <code>σ²</code> directly risks instability if it ever gets very small or
+  very large; working in log-space keeps the numbers in a much better-behaved range.</p>
+
+  <h2>The key mechanism — proving it with real calculus</h2>
+  <p>This is the part that actually explains <em>why</em> a large-scale task doesn't drown out a small one.
+  Fix a task's data-driven loss at some constant <code>L</code> (pretend, for a moment, that the backbone has
+  stopped changing) and ask: what value of <code>log_var</code> would this task's own uncertainty parameter
+  settle at, if it could freely minimize its own term?</p>
+  <div class="code-block">
+    <div class="file-tag">solving for the optimal log_var, given a fixed L</div>
+    <pre><code>f(v) = exp(-v)·L + v                        # v = log_var; using the classification-shaped term for clean numbers
+f'(v) = -exp(-v)·L + 1 = 0
+exp(-v) = 1/L
+v* = log(L)                                  # the optimal log_var exactly matches log(the task's own error scale)
+
+f(v*) = (1/L)·L + log(L) = 1 + log(L)        # <- the settled contribution to the total loss</code></pre>
+  </div>
+  <p>Read that last line carefully: once a task's uncertainty has settled at its optimum, its contribution to
+  the total loss is <code>1 + log(L)</code> — <strong>logarithmic</strong> in its own raw error scale, not
+  linear. A task with error <code>10,000</code> doesn't contribute <code>10,000</code> to the shared gradient
+  signal — it contributes about <code>10.2</code>. This is the entire mechanism, laid bare: uncertainty weighting
+  doesn't just rescale losses by some fixed factor, it <em>compresses</em> the effective range of scales any
+  task can dominate by.</p>
+
+  <table class="cmp">
+    <tr><th>Raw loss <code>L</code></th><th>Optimal <code>σ²</code> (= L)</th><th>Settled contribution <code>1 + log(L)</code></th></tr>
+    <tr><td>1</td><td>1</td><td>1.00</td></tr>
+    <tr><td>2</td><td>2</td><td>1.69</td></tr>
+    <tr><td>10</td><td>10</td><td>3.30</td></tr>
+    <tr><td>100</td><td>100</td><td>5.61</td></tr>
+    <tr><td>1,000</td><td>1,000</td><td>7.91</td></tr>
+    <tr><td>10,000</td><td>10,000</td><td>10.21</td></tr>
+  </table>
+  <p><code>L</code> spans four orders of magnitude across this table — a 10,000× range — while the settled
+  contribution spans barely 10×. That compression is exactly the effect that lets an unnormalized price-MSE task
+  and a bounded cross-entropy task share one backbone without one silently starving the other of gradient signal.</p>
+
+  <div class="diagram">
+    <div class="grid-label">the U-shape this is actually minimizing — total contribution vs. log_var, for a fixed L=10</div>
+    <svg viewBox="0 0 340 150" width="340" height="150" style="display:block;margin:0 auto;">
+      <line x1="30" y1="130" x2="320" y2="130" stroke="var(--border)" stroke-width="1"/>
+      <line x1="30" y1="10" x2="30" y2="130" stroke="var(--border)" stroke-width="1"/>
+      <text x="10" y="16" font-size="9" fill="var(--text-dim)">high</text>
+      <text x="10" y="126" font-size="9" fill="var(--text-dim)">low</text>
+      <text x="175" y="145" font-size="9" fill="var(--text-dim)" text-anchor="middle">log_var (v) →</text>
+      <path d="M 45 15 C 90 40, 130 90, 175 108 S 260 60, 305 20" stroke="var(--accent)" stroke-width="2.5" fill="none"/>
+      <line x1="175" y1="10" x2="175" y2="130" stroke="var(--good-border)" stroke-width="1.5" stroke-dasharray="3,3"/>
+      <circle cx="175" cy="108" r="3.5" fill="var(--good-border)"/>
+      <text x="175" y="145" font-size="8" fill="var(--good-text)" text-anchor="middle" dy="12">v* = log(10) ≈ 2.30, min ≈ 3.30</text>
+    </svg>
+    <p class="diagram-caption">Too negative (claiming high confidence): <code>exp(-v)·L</code> explodes faster than
+    <code>v</code> can fall. Too positive (claiming total uncertainty): <code>v</code> grows without the precision
+    term shrinking fast enough to compensate. The genuine minimum sits in between — that's what training actually
+    converges toward.</p>
+  </div>
+
+  <h2>Connecting it to the two implementations in this repo</h2>
+  <p>Both are correct for the task mix they were written for — <code>CLAUDE.md</code> already flags this, and
+  the derivation above explains exactly why the difference exists:</p>
+  <div class="code-block">
+    <div class="file-tag">src/sequences_to_multiple_outcomes/loss_functions.py — the actual branch</div>
+    <pre><code>precision = torch.exp(-self.log_vars[i])
+if task_type == TaskType.CLASSIFICATION:
+    total += (precision * loss) + self.log_vars[i]          # matches the classification derivation above exactly
+else:
+    total += (precision * loss) + (0.5 * self.log_vars[i])  # the extra ½ reflects the Gaussian NLL's own ½ log(σ²) term</code></pre>
+  </div>
+  <p><code>train_insurance.py</code>'s dict-keyed version mixes 1 classification + 2 regression tasks and uses
+  <code>+ log_var</code> (no <code>0.5</code>) as a simplification across all of them.
+  <code>train_insurance_representation_for_multi_tasks.py</code>'s list-keyed version is 4 regression tasks only,
+  so it applies the Gaussian-specific <code>0.5</code> factor uniformly, matching every task's own derivation.
+  Copying one file's version verbatim into the other's context would quietly apply the wrong constant to at
+  least one task type — small in isolation, but it shifts each task's <em>relative</em> weight the moment
+  several such terms are summed together, which is the entire point of this technique.</p>
+
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — reading <code>precisions()</code> after training</div>
+    <p><code>self.log_vars</code> isn't just an internal detail — <code>precisions()</code> (<code>exp(-log_var)</code>
+    per task) is a genuine diagnostic. A task with high precision (small <code>σ²</code>) is one the model
+    considers reliably predictable; a task with low precision is one it's treating as inherently noisy. Reading
+    this after training tells you something real about which of your targets the model actually trusts.</p>
+  </div>
+
+  <h2>Fixed weighting vs. learned uncertainty weighting</h2>
+  <table class="cmp">
+    <tr><th></th><th>Fixed manual weights</th><th>Uncertainty weighting</th></tr>
+    <tr><td>Where weights come from</td><td>Hand-picked, hyperparameter search</td><td>Learned jointly with the model, via ordinary backprop</td></tr>
+    <tr><td>Re-tuning needed if a task's scale changes</td><td>Yes, by hand</td><td>No — the model re-settles automatically</td></tr>
+    <tr><td>Extra parameters</td><td>None</td><td>One <code>log_var</code> per task — negligible</td></tr>
+    <tr><td>Interpretability</td><td>Weights are arbitrary numbers you chose</td><td><code>precisions()</code> reflects genuine per-task confidence</td></tr>
+    <tr><td>Failure mode</td><td>Wrong weight silently starves a task forever</td><td>Requires the Gaussian/categorical noise assumption to be a reasonable model of the actual error distribution</td></tr>
+  </table>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Homoscedastic uncertainty</dt>
+    <dd>Uncertainty that's constant across all examples for a given task (one <code>σ²</code> per task), as
+    opposed to <em>heteroscedastic</em> uncertainty, which would vary per example. This paper's whole mechanism
+    is homoscedastic — <code>log_vars</code> has one entry per task, not per sample.</dd>
+
+    <dt>Precision</dt>
+    <dd><code>1/σ²</code> — how tightly concentrated a distribution is. High precision = low variance = the model
+    claims this task is predictable. Computed as <code>exp(-log_var)</code> throughout this repo's code.</dd>
+
+    <dt>Negative log-likelihood (NLL)</dt>
+    <dd>The loss used here — instead of hand-designing a loss function, assume a probability distribution over
+    outputs and take <code>-log</code> of how likely the true value was under it. Minimizing NLL is equivalent
+    to maximizing likelihood.</dd>
+
+    <dt>Settled contribution</dt>
+    <dd>What a task's loss term evaluates to once its own <code>log_var</code> has converged to its optimum for
+    that task's current error scale — <code>1 + log(L)</code> in the derivation above, growing logarithmically
+    rather than linearly in the raw loss <code>L</code>.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Multi-task losses summed with fixed weights let the largest-scale task dominate every shared gradient step — the actual problem this technique solves.</li>
+    <li>Each task's loss becomes a negative log-likelihood under an assumed distribution (Gaussian for regression, softmax for classification) with its own learnable variance.</li>
+    <li>Regression's precise term: <code>(1/(2σ²))·L + ½log(σ²)</code>. Classification's: <code>(1/σ²)·L + log(σ)</code>. Same two-part shape, different constant.</li>
+    <li>Parameterize <code>log(σ²)</code>, never <code>σ²</code> directly — keeps variance positive with no explicit constraint, and stays numerically well-behaved.</li>
+    <li>The mechanism that actually matters: at its optimum, a task's settled loss contribution grows as <code>O(log L)</code>, not <code>O(L)</code> — proven with real calculus above, not just asserted.</li>
+    <li>Don't copy the exact <code>0.5</code>-factor convention between this repo's two implementations without checking the task mix — regression-only and mixed-task-type contexts use different constants for a real mathematical reason.</li>
+    <li><code>precisions()</code> is a genuine post-training diagnostic, not just an internal detail — it reflects which tasks the model actually trusts.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="25-optimizers-and-schedulers.html"><span class="dir">Back</span>Lesson 25 — Optimizers &amp; Schedulers</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lesson 27 — MLflow: From Training Script to Deployed Container</title>
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="index.html">📘 A Study on Transformer <span class="dot">·</span> Lessons</a>
+    <nav class="pill-nav">
+      <a class="pill" href="index.html">Overview</a>
+      <a class="pill" href="01-attention-and-rope.html"><span class="nav-dot dot-core"></span>1 · Attention &amp; RoPE</a>
+      <a class="pill" href="02-three-architectures.html"><span class="nav-dot dot-multi"></span>2 · Three Architectures</a>
+      <a class="pill" href="03-cls-and-padding.html"><span class="nav-dot dot-enc"></span>3 · CLS &amp; Padding</a>
+      <a class="pill" href="04-datasets-and-pipelines.html"><span class="nav-dot dot-core"></span>4 · Datasets &amp; Pipelines</a>
+      <a class="pill" href="05-self-supervised-contrastive.html"><span class="nav-dot dot-enc"></span>5 · Contrastive Pretraining</a>
+      <a class="pill" href="06-applied-decoder-insurance.html"><span class="nav-dot dot-dec"></span>6 · Decoder Project</a>
+      <a class="pill" href="07-applied-encoder-insurance.html"><span class="nav-dot dot-enc"></span>7 · Encoder Project</a>
+      <a class="pill" href="08-validation-and-deployment.html"><span class="nav-dot dot-core"></span>8 · Validate &amp; Deploy</a>
+      <a class="pill" href="09-beyond-nlp.html"><span class="nav-dot dot-multi"></span>9 · Beyond NLP</a>
+      <a class="pill" href="10-multi-task-encoder.html"><span class="nav-dot dot-enc"></span>10 · Multi-Task Encoder</a>
+      <a class="pill" href="11-bert-pretraining-finetuning.html"><span class="nav-dot dot-enc"></span>11 · BERT</a>
+      <a class="pill" href="12-asymmetric-losses-and-constraints.html"><span class="nav-dot dot-core"></span>12 · Asymmetric Losses</a>
+      <a class="pill" href="13-reading-training-signals.html"><span class="nav-dot dot-core"></span>13 · Reading Signals</a>
+      <a class="pill" href="14-baselines-and-checkpointing.html"><span class="nav-dot dot-core"></span>14 · Baselines &amp; Checkpoints</a>
+      <a class="pill" href="15-explicit-vs-derived-targets.html"><span class="nav-dot dot-core"></span>15 · Explicit vs Derived</a>
+      <a class="pill" href="16-proving-shift-by-one.html"><span class="nav-dot dot-dec"></span>16 · Shift-by-One Proof</a>
+      <a class="pill" href="17-event-attribution.html"><span class="nav-dot dot-multi"></span>17 · Event Attribution</a>
+      <a class="pill" href="18-linear-probing.html"><span class="nav-dot dot-multi"></span>18 · Linear Probing</a>
+      <a class="pill" href="19-visualizing-representations.html"><span class="nav-dot dot-multi"></span>19 · Visualizing Representations</a>
+      <a class="pill" href="20-cka-comparing-representations.html"><span class="nav-dot dot-multi"></span>20 · CKA</a>
+      <a class="pill" href="21-final-synthesis.html"><span class="nav-dot dot-multi"></span>21 · Final Synthesis</a>
+      <a class="pill" href="22-tensor-manipulation.html"><span class="nav-dot dot-core"></span>22 · Tensor Manipulation</a>
+      <a class="pill" href="23-rope-end-to-end.html"><span class="nav-dot dot-core"></span>23 · RoPE Deep Dive</a>
+      <a class="pill" href="24-masking-complete-guide.html"><span class="nav-dot dot-core"></span>24 · Masking</a>
+      <a class="pill" href="25-optimizers-and-schedulers.html"><span class="nav-dot dot-core"></span>25 · Optimizers &amp; Schedulers</a>
+      <a class="pill" href="26-uncertainty-weighted-loss.html"><span class="nav-dot dot-core"></span>26 · Uncertainty Weighting</a>
+      <a class="pill current" href="27-mlflow-deployment-pipeline.html"><span class="nav-dot dot-core"></span>27 · MLflow Deployment</a>
+    </nav>
+  </div>
+</header>
+
+<main class="page">
+  <p class="eyebrow">Lesson 27 of 27</p>
+  <h1>MLflow: From Training Script to Deployed Container</h1>
+  <p class="subtitle">Getting a model from <code>mlflow.start_run()</code> to a running Docker container touched
+  nine genuinely different systems — MLflow's serialization formats, its model registry, its two separate
+  stores, a security feature, Docker networking, dependency locking, and Hydra's path resolution — each with
+  its own failure mode. This lesson pulls the whole journey into one map, organized by concept instead of by
+  the order the errors actually happened in, so the next project only needs the map, not the scars.</p>
+
+  <div class="arch-badges">
+    <span class="arch-badge core"><span class="dot"></span>Core — every piece here is MLflow/Docker/uv mechanics, independent of model architecture</span>
+  </div>
+
+  <div class="files-box">
+    <span class="label">Files to have open alongside this lesson</span>
+    <ul>
+      <li><code>scripts/mock_train_torch.py</code> — logging, registration, and reproducibility artifacts</li>
+      <li><code>scripts/mock_inference_torch.py</code> — loading a registered model by alias</li>
+      <li><code>scripts/fetch_artifacts.py</code> — pulling the exact training-time manifest for a Docker build</li>
+      <li><code>Dockerfile</code> — the full fetch → sync → run pipeline</li>
+      <li><code>config/config.yaml</code> — <code>tracking_uri</code>, the single value that determines which architecture (below) you're actually running</li>
+    </ul>
+  </div>
+
+  <h2>The big picture — what actually got built</h2>
+  <div class="diagram">
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">Train</span><span class="s">log params/metrics/model + pyproject.toml/uv.lock/source</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">Register</span><span class="s">new version of "mock-model"</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">Alias</span><span class="s">point "champion" at it (manual)</span></div>
+    </div>
+    <div class="flow" style="margin-top: 14px;">
+      <div class="flow-box accent"><span class="t">Docker build</span><span class="s">fetch manifest → uv sync --frozen</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">Docker run</span><span class="s">load champion, run inference</span></div>
+    </div>
+    <p class="diagram-caption">Five stages, each independently correct-looking, each capable of silently
+    breaking the next one — which is exactly what happened, repeatedly, until every stage agreed on the same
+    underlying assumptions.</p>
+  </div>
+
+  <h2>1. Logging a model — the serialization format choice</h2>
+  <p>The basic instrumentation, inside <code>with mlflow.start_run():</code></p>
+  <div class="code-block">
+    <div class="file-tag">scripts/mock_train_torch.py</div>
+    <pre><code>mlflow.log_params(OmegaConf.to_container(cfg.params, resolve=True))
+mlflow.log_metrics({"train_loss": avg_train_loss, "val_loss": avg_val_loss}, step=epoch)
+mlflow.pytorch.log_model(model, name="best_model", input_example=input_example, serialization_format="pickle")</code></pre>
+  </div>
+  <p>Recent MLflow defaults <code>mlflow.pytorch.log_model</code> to <code>serialization_format="pt2"</code> —
+  PyTorch's <code>torch.export</code> traced-graph format. That default demands two things a simple script won't
+  have ready: an <code>input_example</code> tensor (to actually trace <code>forward()</code>), and a strict
+  <code>TensorSpec</code>-shaped model signature. <code>serialization_format="pickle"</code> sidesteps both —
+  it just pickles the live Python model object, no tracing required.</p>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ The tradeoff pickle makes</div>
+    <p>Pickling an <code>nn.Module</code> serializes the <strong>entire object graph</strong> — every submodule,
+    every configured attribute, fully wired. Loading it back needs no manual reconstruction: no calling
+    <code>FusionEmbedding(...)</code> or <code>RoPE(...)</code> yourself, the loaded object already has
+    <code>.backbone.fusion</code>, <code>.backbone.position_emb</code>, everything, exactly as saved. The cost:
+    pickle only stores a <em>reference</em> to each class (module path + class name), not its code — the exact
+    class definitions must be importable wherever the model is loaded later.</p>
+  </div>
+
+  <h2>2. The pickle-import gotcha</h2>
+  <p>A class defined inside a script run directly (<code>python mock_train_torch.py</code>) gets pickled with
+  its module recorded as <code>__main__</code> — not the file's real name. A different script trying to
+  unpickle it later needs that class accessible as <code>__main__.ClassName</code> too, which is not automatic.</p>
+  <div class="code-block">
+    <div class="file-tag">scripts/mock_inference_torch.py</div>
+    <pre><code># Unused directly below, but required: pickle resolves classes by looking up
+# `__main__.LinearLayer` at load time. Importing them here makes them attributes of
+# *this* script's module -- which becomes `__main__` when run directly -- so unpickling
+# finds them regardless of which file originally defined them.
+from mock_train_torch import LinearLayer, SimpleNetwork, generate_dataset  # noqa: F401</code></pre>
+  </div>
+  <p>This only bites <code>__main__</code>-run scripts. Classes living in a real installed package (this repo's
+  own <code>sequences_to_multiple_outcomes</code>, declared under <code>[tool.hatch.build.targets.wheel]</code>)
+  pickle with a stable package path instead — <code>sequences_to_multiple_outcomes.embedding_layers.FusionEmbedding</code>
+  — and unpickle correctly via ordinary import resolution, no trick needed, as long as the package is installed
+  wherever the model is loaded.</p>
+
+  <h2>3. Registry versions and aliases — nothing moves by itself</h2>
+  <p>Registering doesn't happen automatically just because a model was logged — it's a separate, explicit call:</p>
+  <div class="code-block">
+    <div class="file-tag">scripts/mock_train_torch.py</div>
+    <pre><code># register exactly once per run, from the best checkpoint -- not inside the `if improved:`
+# block, which would create a noisy new version on every single val_loss improvement
+run_id = mlflow.active_run().info.run_id
+mlflow.register_model(model_uri=f"runs:/{run_id}/best_model", name="mock-model")</code></pre>
+  </div>
+  <p>Every training run that includes this line creates a <strong>new, independent version</strong> under
+  <code>mock-model</code> — version 1, 2, 3, climbing forever. Loading by alias uses
+  <code>models:/mock-model@champion</code>, but the <code>champion</code> alias only ever points at whatever
+  version it was <em>last explicitly assigned to</em>:</p>
+  <div class="code-block">
+    <div class="file-tag">reassigning champion — never automatic</div>
+    <pre><code>from mlflow import MlflowClient
+MlflowClient().set_registered_model_alias("mock-model", "champion", &lt;new_version_number&gt;)</code></pre>
+  </div>
+  <div class="callout warn">
+    <div class="callout-title">⚠ The mistake this causes if missed</div>
+    <p>Retraining without reassigning the alias leaves <code>champion</code> pointing at an <em>old</em> version
+    — a real, working model, just not the one you just produced. Every symptom looks identical to a genuine bug
+    (missing files, stale code) because it genuinely is loading a different, older run than the one you're
+    thinking about. Always check <em>which run an alias actually resolves to</em> before debugging further:
+    <code>MlflowClient().get_model_version_by_alias("mock-model", "champion").run_id</code>.</p>
+  </div>
+
+  <h2>4. The backend store vs. the artifact store — two separate systems</h2>
+  <p>This is the one that cost three full debugging rounds, all producing the identical symptom
+  (<code>Failed to download artifacts from path 'pyproject.toml'</code>) from three different underlying causes.
+  The starting confusion: MLflow tracks two categorically different kinds of data, in two independently
+  configured places.</p>
+  <table class="cmp">
+    <tr><th></th><th>Backend store</th><th>Artifact store</th></tr>
+    <tr><td>What it holds</td><td>Params, metrics, tags, run status, registry metadata</td><td>Actual files — model weights, logged artifacts</td></tr>
+    <tr><td>Configured via</td><td><code>--backend-store-uri</code></td><td><code>--default-artifact-root</code> or <code>--artifacts-destination</code></td></tr>
+    <tr><td>This project's setting</td><td><code>sqlite:///mlflow.db</code></td><td><code>./mlartifacts</code></td></tr>
+  </table>
+
+  <p>The artifact store has two fundamentally different <em>access modes</em>, and this is where everything
+  actually went wrong:</p>
+
+  <div class="diagram">
+    <div class="grid-label">local-path mode (--default-artifact-root) — client reads the filesystem directly</div>
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">Client</span><span class="s">e.g. fetch_artifacts.py</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">file:D:/.../mlruns/...</span><span class="s">a raw local path</span></div>
+    </div>
+    <p class="diagram-caption">Works only if the client can literally open that path — fine on the same host
+    machine, impossible from inside a Docker container, which has its own isolated filesystem.</p>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">proxied mode (--artifacts-destination) — client goes through the server over HTTP</div>
+    <div class="flow">
+      <div class="flow-box accent"><span class="t">Client</span><span class="s">e.g. fetch_artifacts.py</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box"><span class="t">mlflow-artifacts:/...</span><span class="s">an HTTP request to the server</span></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-box accent"><span class="t">Server</span><span class="s">reads the real file, streams it back</span></div>
+    </div>
+    <p class="diagram-caption">Works from anywhere that can reach the server over the network — including a
+    Docker container — because the client never needs filesystem access to the artifact store at all.</p>
+  </div>
+
+  <div class="callout warn">
+    <div class="callout-title">⚠ The actual root cause, after two failed attempts at the flag alone</div>
+    <p>Switching the server to <code>--artifacts-destination</code> only changes the scheme for experiments
+    created <em>through the server</em>. This project's training script had
+    <code>tracking_uri: 'sqlite:///mlflow.db'</code> — a <strong>direct path to the database file</strong>,
+    completely bypassing the running <code>mlflow server</code> process. Every training run created its
+    experiment via direct file access, which falls back to a plain local <code>file:</code> artifact URI no
+    matter what flag the (unused, for this purpose) server was given. The real fix was changing
+    <code>tracking_uri</code> to <code>http://127.0.0.1:5000</code> — routing training through the same server
+    fetch/inference already used, so <em>all</em> experiment creation actually goes through the proxying logic.</p>
+  </div>
+
+  <div class="callout good">
+    <div class="callout-title">✓ The transferable rule</div>
+    <p>Every component that touches MLflow — training, fetching, serving, a notebook, a teammate's laptop —
+    must agree on the <em>same</em> <code>tracking_uri</code>, and it should be the server's HTTP address, not
+    a direct path to whatever's backing it. Mixing "some things go through the server, some things access the
+    file/DB directly" is what breaks proxying silently, with no error at the point the inconsistency is
+    introduced — only later, wherever the mismatch actually gets exercised.</p>
+  </div>
+
+  <h2>5. Server security — Host header validation</h2>
+  <p>A different, unrelated error along the way: <code>403 Invalid Host header - possible DNS rebinding attack
+  detected</code>. This is a real MLflow security feature, not a bug — it validates the HTTP <code>Host</code>
+  header against an allowlist, and <code>host.docker.internal</code> (Docker Desktop's DNS alias for reaching
+  the host machine from inside a container) isn't on it by default.</p>
+  <div class="code-block">
+    <div class="file-tag">the fix — configured on the server, not the client</div>
+    <pre><code>mlflow server --backend-store-uri sqlite:///mlflow.db --artifacts-destination ./mlartifacts \
+  --port 5000 --allowed-hosts "host.docker.internal:5000,localhost:5000,127.0.0.1:5000"</code></pre>
+  </div>
+  <div class="callout tip">
+    <div class="callout-title">💡 Tip — this flag is backend-dependent</div>
+    <p><code>--allowed-hosts</code> only works with MLflow's default FastAPI/uvicorn server. It silently doesn't
+    apply if MLflow falls back to Flask/waitress (which happens on Windows without <code>gunicorn</code>
+    available) — check <code>mlflow server --help</code> lists the flag at all before assuming it took effect.</p>
+  </div>
+
+  <h2>6. Docker networking — reaching the host from inside a build</h2>
+  <p>A server started with <code>mlflow server --port 5000</code> in a normal terminal runs on the
+  <strong>host</strong> machine. From inside a Docker build or container, <code>localhost</code>/<code>127.0.0.1</code>
+  refers to the container itself, not the host — a request there simply finds nothing listening. Docker Desktop
+  provides a dedicated DNS name for this exact situation:</p>
+  <div class="code-block">
+    <div class="file-tag">Dockerfile — passed as a build arg, resolved at build time</div>
+    <pre><code>ARG MLFLOW_TRACKING_URI
+ENV MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI}</code></pre>
+  </div>
+  <pre><code>docker build --build-arg MLFLOW_TRACKING_URI=http://host.docker.internal:5000 -t mock-model-image .</code></pre>
+  <p>This is also why the fetch step needs to run at <strong>build</strong> time in this Dockerfile — it needs
+  live network access to the tracking server, which means the build environment (your machine, or CI) has to
+  actually be able to reach it. A build environment with no network access to internal infrastructure would
+  need this moved into an entrypoint script that fetches at container <em>startup</em> instead.</p>
+
+  <h2>7. Reproducible environments — why <code>pyproject.toml</code> alone isn't enough</h2>
+  <p>The actual motivation for all of this: MLflow's own auto-inferred <code>requirements.txt</code> doesn't
+  know about a project's custom package or a custom package index (this repo's <code>pytorch-cu130</code>).
+  The fix is to log the project's own exact dependency manifest as artifacts, and let <code>uv</code> rebuild
+  the identical environment later:</p>
+  <div class="code-block">
+    <div class="file-tag">scripts/mock_train_torch.py — logged once per run</div>
+    <pre><code>repo_root = get_original_cwd()   # Hydra changes cwd to its own output folder -- a bare
+                                   # relative path would look in the wrong place entirely
+mlflow.log_artifact(os.path.join(repo_root, "pyproject.toml"))
+mlflow.log_artifact(os.path.join(repo_root, "uv.lock"))
+mlflow.log_artifact(os.path.abspath(__file__))   # this script itself -- LinearLayer/SimpleNetwork live here</code></pre>
+  </div>
+  <p><code>pyproject.toml</code> alone only has version <em>ranges</em> (<code>torch&gt;=2.11.0</code>) — a
+  fresh resolution against just that file, run later, isn't guaranteed to reproduce the exact versions that
+  actually trained the model. Only <code>uv.lock</code> pins that exactly, which is why both get logged, and
+  why the Docker build uses <code>--frozen</code>:</p>
+  <div class="code-block">
+    <div class="file-tag">Dockerfile</div>
+    <pre><code>RUN uv sync --frozen --no-install-project</code></pre>
+  </div>
+  <table class="cmp">
+    <tr><th>Flag</th><th>What it does</th><th>Why it's here</th></tr>
+    <tr><td><code>--frozen</code></td><td>Refuses to re-resolve; installs exactly what <code>uv.lock</code> says</td><td>Fails loudly on drift instead of silently picking different versions than training used</td></tr>
+    <tr><td><code>--no-install-project</code></td><td>Skips building/installing the local project's own wheel</td><td>This mock example only needs <code>mock_train_torch.py</code> (fetched separately) — not the real <code>sequences_to_multiple_outcomes</code> package or <code>README.md</code>, neither of which is in this image</td></tr>
+    <tr><td><code>--no-sync</code> (on <code>uv run</code>, at container start)</td><td>Skips <code>uv run</code>'s own implicit re-sync</td><td>Without it, every container start re-triggers the same local-project build attempt <code>--no-install-project</code> was used to avoid during the image build</td></tr>
+  </table>
+  <div class="callout warn">
+    <div class="callout-title">⚠ The gotcha this last flag fixes</div>
+    <p><code>uv run &lt;script&gt;</code> always double-checks the environment against the lockfile before running
+    anything — a built-in convenience for local development, but a liability here: it doesn't inherit
+    <code>--no-install-project</code> from the earlier explicit <code>uv sync</code>, so left alone it retries
+    building the local package on every container start and fails the same way — missing <code>README.md</code>,
+    missing <code>src/</code>. <code>CMD ["uv", "run", "--no-sync", ...]</code> tells it to trust the environment
+    already built into the image, and skip re-verifying it.</p>
+  </div>
+
+  <h2>8. The general artifact-logging model — planning your own structure</h2>
+  <p>Sections 1 and 7 used <code>log_artifact</code>/<code>log_artifacts</code> for specific files. Here's the
+  full mental model behind them, so a future project can be planned deliberately instead of copying calls one
+  at a time.</p>
+
+  <p>Every run has an <strong>artifact tree</strong> — a filesystem-like hierarchy, rooted at that run's own
+  <code>artifact_uri</code>. Every logging call adds something to that tree, at a location you control:</p>
+
+  <table class="cmp">
+    <tr><th>Call</th><th>Logs</th><th>Behavior</th></tr>
+    <tr><td><code>mlflow.log_artifact(local_path, artifact_path=None)</code></td><td>One existing file</td><td>Copies that single file into the tree</td></tr>
+    <tr><td><code>mlflow.log_artifacts(local_dir, artifact_path=None)</code></td><td>An entire local directory</td><td>Recursively copies everything inside it, preserving the directory's own internal structure</td></tr>
+  </table>
+
+  <p><code>artifact_path</code> is what decides <em>where</em> in the tree something lands. Leave it out and
+  the item goes straight into the tree's root; provide a string and it's nested under that subfolder instead
+  — this is the entire reason <code>pyproject.toml</code>/<code>uv.lock</code>/both scripts sit flat while
+  <code>config/</code> sits nested one level down:</p>
+  <div class="code-block">
+    <div class="file-tag">scripts/mock_train_torch.py — same two calls, different placement</div>
+    <pre><code>mlflow.log_artifact(os.path.join(repo_root, "pyproject.toml"))                      # no artifact_path -> tree root
+mlflow.log_artifacts(os.path.join(repo_root, "config"), artifact_path="config")      # artifact_path="config" -> nested</code></pre>
+  </div>
+
+  <div class="diagram">
+    <div class="grid-label">the actual artifact tree this project's runs produce</div>
+    <pre style="margin:0; font-family: Consolas, Menlo, monospace; font-size: 0.85rem; line-height: 1.7;">&lt;run's artifact_uri&gt;/
+├── pyproject.toml
+├── uv.lock
+├── mock_train_torch.py
+├── mock_inference_torch.py
+├── config/
+│   └── config.yaml
+├── best_model/          ← from log_model(..., name="best_model")
+│   ├── MLmodel
+│   └── data/model.pkl
+└── final_model/         ← from log_model(..., name="final_model")
+    ├── MLmodel
+    └── data/model.pkl</pre>
+    <p class="diagram-caption"><code>log_model</code> is really <code>log_artifacts</code> under the hood —
+    it writes a small folder (weights + an <code>MLmodel</code> metadata file describing the flavor/signature)
+    at the <code>name=</code> path, same tree, same rules.</p>
+  </div>
+
+  <h3>Logging things that aren't already files</h3>
+  <p><code>log_artifact</code> needs something already sitting on disk. Most training-time objects aren't —
+  a dict of results, a matplotlib figure, a pandas table. MLflow has purpose-built convenience loggers for the
+  common cases, each one just a thin wrapper that serializes the object to a temp file and calls
+  <code>log_artifact</code> for you:</p>
+  <table class="cmp">
+    <tr><th>Object</th><th>Call</th><th>Lands as</th></tr>
+    <tr><td>A <code>dict</code></td><td><code>mlflow.log_dict(d, "results.json")</code></td><td>A JSON (or YAML, by extension) file</td></tr>
+    <tr><td>A raw string</td><td><code>mlflow.log_text(s, "notes.txt")</code></td><td>A plain text file</td></tr>
+    <tr><td>A matplotlib/plotly figure</td><td><code>mlflow.log_figure(fig, "loss_curve.png")</code></td><td>An image, viewable directly in the MLflow UI</td></tr>
+    <tr><td>Tabular data (list of dicts, dataframe)</td><td><code>mlflow.log_table(data, "predictions.json")</code></td><td>A JSON table with dedicated UI rendering (sortable/filterable)</td></tr>
+  </table>
+  <div class="callout good">
+    <div class="callout-title">✓ The universal escape hatch</div>
+    <p>No convenience method for your object type? Serialize it yourself — <code>torch.save</code>,
+    <code>np.save</code>, <code>json.dump</code>, <code>pickle.dump</code> — to a local temp path, then
+    <code>log_artifact</code> that path. Every convenience logger above is doing exactly this internally; there's
+    nothing MLflow-specific about the serialization step, only about where the result ends up.</p>
+  </div>
+
+  <h3>Reading it back — the mirror image</h3>
+  <table class="cmp">
+    <tr><th>Call</th><th>Does</th></tr>
+    <tr><td><code>MlflowClient().list_artifacts(run_id, path=None)</code></td><td>Browse the tree at one level — like <code>ls</code>. Returns objects with <code>.path</code>, <code>.is_dir</code>, <code>.file_size</code></td></tr>
+    <tr><td><code>MlflowClient().download_artifacts(run_id, path, dst_path)</code></td><td>Pull a file <em>or</em> a whole directory down to local disk (used throughout this lesson's <code>fetch_artifacts.py</code>)</td></tr>
+    <tr><td><code>mlflow.artifacts.load_dict(uri)</code> / <code>load_text(uri)</code></td><td>Read straight into memory — no download-to-disk step — mirroring <code>log_dict</code>/<code>log_text</code></td></tr>
+  </table>
+
+  <h3>A planning framework for a new project</h3>
+  <p>The question worth asking for every piece of data a training run produces: <em>does something downstream
+  need this file to exist at a specific relative path to work correctly?</em> (Section 9 below is the concrete
+  case where getting this wrong broke things.)</p>
+  <table class="cmp">
+    <tr><th>What you have</th><th>Where it goes</th><th>Why</th></tr>
+    <tr><td>Model checkpoints</td><td><code>log_model(..., name="...")</code></td><td>Handles serialization <em>and</em> plugs into the registry in one call</td></tr>
+    <tr><td>Environment manifest (<code>pyproject.toml</code>/<code>uv.lock</code>)</td><td>Flat, at the tree root</td><td><code>uv</code>/<code>pip</code> expect to find them in the current directory, not a subfolder</td></tr>
+    <tr><td>Source code needed to reproduce/unpickle</td><td>Mirroring its <em>real</em> relative directory structure</td><td>Relative imports and Hydra's <code>config_path</code> depend on the shape around them, not just file presence</td></tr>
+    <tr><td>Configuration</td><td>A directory, via <code>log_artifacts(dir, artifact_path=...)</code></td><td>Future config files added later come along automatically — no code change needed to log a new one</td></tr>
+    <tr><td>Metrics tables, sample predictions, plots for human review</td><td><code>log_table</code>/<code>log_figure</code>/<code>log_dict</code></td><td>Directly browsable in the MLflow UI, no separate viewer needed</td></tr>
+  </table>
+
+  <h2>9. Hydra's <code>config_path</code> — relative to the file, not the working directory</h2>
+  <p>The last failure, after everything else finally worked: <code>Primary config directory not found. Check
+  that the config directory '/config' exists</code>.</p>
+  <div class="code-block">
+    <div class="file-tag">scripts/mock_inference_torch.py</div>
+    <pre><code>@hydra.main(version_base=None, config_path="../config", config_name="config")</code></pre>
+  </div>
+  <p><code>config_path</code> resolves relative to <strong>the script's own file location</strong>, not the
+  current working directory. Locally, the script lives at <code>scripts/mock_inference_torch.py</code>, so
+  <code>../config</code> correctly reaches the repo-root <code>config/</code>. The Dockerfile had originally
+  copied the script flat into <code>/app/mock_inference_torch.py</code> — from there, <code>../config</code>
+  resolves to <code>/config</code> (the container's root), not <code>/app/config</code> where <code>config/</code>
+  actually landed.</p>
+  <div class="code-block">
+    <div class="file-tag">Dockerfile — the fix: mirror the local directory layout, don't flatten it</div>
+    <pre><code># scripts/ one level below repo root, sibling to config/ -- exactly like the local repo,
+# so ../config resolves the same way, and mock_train_torch.py sits next to the script
+# that imports it (Section 2's pickle requirement)
+RUN mkdir -p scripts && mv mock_train_torch.py scripts/
+COPY scripts/mock_inference_torch.py ./scripts/
+COPY config ./config
+
+CMD ["uv", "run", "--no-sync", "scripts/mock_inference_torch.py"]</code></pre>
+  </div>
+  <div class="callout good">
+    <div class="callout-title">✓ The transferable rule</div>
+    <p>Any relative path baked into code — a Hydra <code>config_path</code>, a relative import, a relative
+    artifact path — implicitly assumes a specific directory <em>shape</em> around it, not just the presence of
+    the right files. A Dockerfile (or any deployment step) that copies files in flat, changing that shape, will
+    break every one of those assumptions even though every individual file is present and correct.</p>
+  </div>
+
+  <h2>Cheat sheet — symptom → actual cause</h2>
+  <table class="cmp">
+    <tr><th>Symptom</th><th>Actual cause</th></tr>
+    <tr><td><code>MlflowException: ... serialization_format 'pt2' ... input_example is required</code></td><td>MLflow defaults to the traced-graph format; pass <code>input_example</code>, or set <code>serialization_format="pickle"</code></td></tr>
+    <tr><td><code>AttributeError: Can't get attribute 'X' on &lt;module '__main__'&gt;</code></td><td>A pickled class defined in a <code>__main__</code>-run script; import it into the loading script's own namespace too</td></tr>
+    <tr><td>Model loads fine but is clearly the wrong/old one</td><td>The alias wasn't reassigned after the last retrain — check <code>get_model_version_by_alias(...).run_id</code> directly</td></tr>
+    <tr><td><code>Failed to download artifacts ... please ensure the path is correct</code></td><td>Client can't reach the artifact store's storage directly (local-path mode) — check the run's <code>artifact_uri</code>: <code>file:...</code> means direct filesystem access is required; <code>mlflow-artifacts:/...</code> means it's proxied through the server</td></tr>
+    <tr><td><code>403 Invalid Host header - possible DNS rebinding attack detected</code></td><td>The request's <code>Host</code> header isn't on the server's allowlist — add it via <code>--allowed-hosts</code> (FastAPI/uvicorn backend only)</td></tr>
+    <tr><td>Connection refused from inside a Docker build/container to a host-run server</td><td><code>localhost</code> inside a container means the container itself — use <code>host.docker.internal</code> (Docker Desktop) instead</td></tr>
+    <tr><td><code>Readme file does not exist: README.md</code> during <code>uv sync</code>/<code>uv run</code></td><td><code>uv</code> trying to build the local project's own wheel in an image that doesn't have the full source — use <code>--no-install-project</code> at build time and <code>--no-sync</code> at run time</td></tr>
+    <tr><td><code>Primary config directory not found</code> (Hydra)</td><td><code>config_path</code> is relative to the script's file location, not the working directory — mirror the local directory structure in the image instead of copying files in flat</td></tr>
+  </table>
+
+  <h2>Glossary</h2>
+  <dl class="glossary">
+    <dt>Backend store</dt>
+    <dd>Where MLflow keeps params, metrics, tags, and registry metadata — a database (SQLite, Postgres, etc.), configured via <code>--backend-store-uri</code>.</dd>
+
+    <dt>Artifact store</dt>
+    <dd>Where MLflow keeps actual files — model weights, logged artifacts. A completely separate system from the backend store, configured via <code>--default-artifact-root</code> (local-path mode) or <code>--artifacts-destination</code> (proxied mode).</dd>
+
+    <dt>Proxied artifact access</dt>
+    <dd>Clients fetch/upload artifact bytes via HTTP requests to the tracking server, which reads/writes the real storage on the client's behalf — the server acts as a proxy, so clients never need direct filesystem (or cloud-credential) access to the underlying store.</dd>
+
+    <dt>Registered model alias</dt>
+    <dd>A named pointer (e.g. <code>champion</code>) to one specific version of a registered model. Never moves automatically — reassigning it to a new version is always an explicit, separate step from registering that version.</dd>
+
+    <dt>Artifact tree</dt>
+    <dd>The filesystem-like hierarchy of files/directories logged to one run, rooted at that run's <code>artifact_uri</code>. <code>artifact_path</code> on any logging call chooses where in this tree the item lands — omitted, it goes to the root.</dd>
+
+    <dt>Convenience logger</dt>
+    <dd>A thin MLflow wrapper (<code>log_dict</code>, <code>log_text</code>, <code>log_figure</code>, <code>log_table</code>) that serializes a common in-memory object type to a temp file and calls <code>log_artifact</code> for you. For anything without a dedicated wrapper, serializing it yourself first and calling <code>log_artifact</code> directly always works.</dd>
+
+    <dt><code>--frozen</code> (uv)</dt>
+    <dd>Installs exactly what a lockfile specifies, refusing to silently re-resolve anything — fails loudly if the lockfile and manifest disagree, rather than quietly picking different versions.</dd>
+  </dl>
+
+  <h2>Checklist</h2>
+  <ul>
+    <li>Choose <code>serialization_format="pickle"</code> for simplicity (whole object graph, no tracing) or <code>"pt2"</code> for a portable traced format (needs <code>input_example</code> + a <code>TensorSpec</code>-compatible signature) — know which one you're getting by default in your MLflow version.</li>
+    <li>Pickled classes need to be importable wherever they're loaded — trivial for a real installed package, requires the <code>__main__</code>-import trick for a bare script.</li>
+    <li>Registering a model and assigning/moving an alias are two separate, always-manual steps — never assume an alias tracks "whatever I just trained."</li>
+    <li>Backend store (metadata) and artifact store (files) are configured independently — know which access mode (local-path vs. proxied) your artifact store is actually using before debugging a download failure.</li>
+    <li><strong>Every component must share the same <code>tracking_uri</code></strong>, pointed at the server's HTTP address — not a direct path to whatever backs it — or proxying silently doesn't apply to whatever bypassed the server.</li>
+    <li><code>localhost</code> inside a container isn't the host machine — use <code>host.docker.internal</code> (or equivalent) to reach services running on the host.</li>
+    <li>Log <code>uv.lock</code>, not just <code>pyproject.toml</code>, if reproducibility matters — ranges aren't pins.</li>
+    <li><code>--no-install-project</code> at build time and <code>--no-sync</code> at run time are a matched pair — needed together whenever the deployed image doesn't contain the full local project source.</li>
+    <li><code>log_artifact</code> logs one file; <code>log_artifacts</code> logs a whole directory recursively — <code>artifact_path</code> on either one chooses where in the run's artifact tree it lands, root by default.</li>
+    <li>For anything that isn't already a file — a dict, a figure, a table — reach for the matching convenience logger (<code>log_dict</code>/<code>log_figure</code>/<code>log_table</code>) before hand-rolling a temp-file dance; for anything without one, serializing it yourself and calling <code>log_artifact</code> always works as the universal fallback.</li>
+    <li>Relative paths (Hydra <code>config_path</code>, relative imports) assume a directory <em>shape</em>, not just file presence — mirror the local layout in the deployment image rather than flattening it.</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <a href="26-uncertainty-weighted-loss.html"><span class="dir">Back</span>Lesson 26 — Uncertainty-Weighted Loss</a>
+    <a class="next" href="index.html"><span class="dir">Done —</span>Back to Overview</a>
+  </div>
+</main>
+</body>
+</html>

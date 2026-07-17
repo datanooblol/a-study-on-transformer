@@ -1,0 +1,10 @@
+params:
+  epochs: 100
+  lr: 0.003
+  'n': 1000
+  d_model: 10
+  expansion: 4
+  batch_size: 32
+version: 0.0.1
+tracking_uri: sqlite:///mlflow.db
+experiment_name: deep-learning-experiment

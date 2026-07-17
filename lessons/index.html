@@ -39,6 +39,7 @@
       <a class="pill" href="24-masking-complete-guide.html"><span class="nav-dot dot-core"></span>24 · Masking</a>
       <a class="pill" href="25-optimizers-and-schedulers.html"><span class="nav-dot dot-core"></span>25 · Optimizers &amp; Schedulers</a>
       <a class="pill" href="26-uncertainty-weighted-loss.html"><span class="nav-dot dot-core"></span>26 · Uncertainty Weighting</a>
+      <a class="pill" href="27-mlflow-deployment-pipeline.html"><span class="nav-dot dot-core"></span>27 · MLflow Deployment</a>
     </nav>
   </div>
 </header>
@@ -47,16 +48,16 @@
   <p class="eyebrow">Study Curriculum</p>
   <h1>A Study on Transformer</h1>
   <p class="subtitle">Understanding transformer architecture inside out — not as a language model, but as a general
-  sequence-processing pattern applied to insurance customer data. Twenty-six lessons, most grounded in the actual
+  sequence-processing pattern applied to insurance customer data. Twenty-seven lessons, most grounded in the actual
   code in this repo, covering two examples of the pattern applied outside insurance/NLP entirely, a multi-task
   extension of the encoder project, the real-world model (BERT) behind the CLS trick studied along the way, loss
   functions beyond plain MSE, how to read — and act on — whether any of it actually worked, where a target value
   actually comes from, a runnable proof of the guarantee that makes shift-by-one work at all, four ways to
   interrogate a model after it's already trained, a final synthesis that combines all four into one real answer,
   the tensor manipulation mechanics every earlier lesson used without stopping to name, a full derivation of
-  RoPE, the complete mental model behind masking, how to actually get one of these models to converge, and the
-  real derivation — with real calculus — behind the uncertainty-weighted multi-task loss already living in three
-  places in this repo.</p>
+  RoPE, the complete mental model behind masking, how to actually get one of these models to converge, the
+  real derivation behind the uncertainty-weighted multi-task loss, and the full MLflow-to-Docker deployment
+  journey — nine systems, nine failure modes, mapped so the next project only needs the map.</p>
 
   <h2>How to use this</h2>
   <p>Read the lessons in order the first time — each one builds on the last. After that, use the pill nav above
@@ -151,6 +152,8 @@
       <div class="stack-box accent">Lesson 25 — Optimizers &amp; Schedulers<span class="sub">AdamW mechanics, why transformers need warmup, cosine decay, and validating a learning rate instead of borrowing one</span></div>
       <div class="stack-arrow">↓</div>
       <div class="stack-box accent">Lesson 26 — Uncertainty-Weighted Loss<span class="sub">the paper behind this repo's multi-task loss, derived with real calculus — why a task's settled contribution grows as log(L), not L</span></div>
+      <div class="stack-arrow">↓</div>
+      <div class="stack-box accent">Lesson 27 — MLflow Deployment Pipeline<span class="sub">logging, registry aliases, the backend/artifact store split, Docker networking, uv reproducibility, Hydra paths — nine systems, one map</span></div>
     </div>
   </div>
 
@@ -193,6 +196,7 @@
     <tr><td>24</td><td><a href="24-masking-complete-guide.html">Masking, Completely</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>Where does a mask come from, why <code>-inf</code>, and where is it allowed to change meaning?</td></tr>
     <tr><td>25</td><td><a href="25-optimizers-and-schedulers.html">Optimizers &amp; Schedulers</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>What does AdamW actually track, why do transformers need warmup, and how do you validate a learning rate instead of borrowing one?</td></tr>
     <tr><td>26</td><td><a href="26-uncertainty-weighted-loss.html">Uncertainty-Weighted Loss</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>Why does a task's settled contribution to a multi-task loss grow logarithmically in its own error scale, not linearly?</td></tr>
+    <tr><td>27</td><td><a href="27-mlflow-deployment-pipeline.html">MLflow Deployment Pipeline</a></td><td><span class="arch-badge core inline"><span class="dot"></span>Core</span></td><td>What actually has to be true for a trained model to load correctly in a Docker container on a different machine?</td></tr>
   </table>
 
   <h2>Repo map</h2>
@@ -222,6 +226,7 @@
       <li>lesson 24 (Masking, Completely) is grounded in <code>src/sequences_to_multiple_outcomes/collate_functions.py</code>, <code>encoder_bock.py</code>, and <code>attention.py</code> — a second, independently hand-built encoder project (separate from <code>package/</code>), including a real mask-convention bug found and fixed there in the same session</li>
       <li>lesson 25 (Optimizers &amp; Schedulers) is grounded in <code>notebooks/learning_scheduler.ipynb</code> — a standalone hand-rolled <code>get_cosine_schedule_with_warmup</code> + AdamW toy training loop, separate from every applied project above</li>
       <li>lesson 26 (Uncertainty-Weighted Loss) is grounded in all three of <code>train_insurance.py</code>, <code>train_insurance_representation_for_multi_tasks.py</code>, and <code>src/sequences_to_multiple_outcomes/loss_functions.py</code> — the same <code>UncertaintyWeightedLoss</code> pattern implemented three times across this repo, now derived from its source paper (Kendall, Gal &amp; Cipolla, 2018)</li>
+      <li>lesson 27 (MLflow Deployment Pipeline) is grounded in <code>scripts/mock_train_torch.py</code>, <code>mock_inference_torch.py</code>, <code>fetch_artifacts.py</code>, the repo-root <code>Dockerfile</code>, and <code>config/config.yaml</code>'s <code>tracking_uri</code> — a standalone MLflow + Docker deployment exercise, separate from every transformer project above</li>
     </ul>
   </div>
 

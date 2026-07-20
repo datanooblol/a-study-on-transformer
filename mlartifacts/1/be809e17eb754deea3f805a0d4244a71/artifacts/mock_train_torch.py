@@ -157,7 +157,6 @@ def my_app(cfg : DictConfig) -> None:
         mlflow.pytorch.log_model(best_model, name="best_model", input_example=input_example, serialization_format="pickle")  # type: ignore[arg-type]
         mlflow.log_metrics({"best_val_loss": early_stopper.best_loss, "best_epoch": best_epoch})
 
-        mlflow.set_tag('stage', cfg.stage)
         # register exactly once per run, from the best checkpoint (not final_model, which may be
         # worse than best_model if early stopping already fired)
         run_id = mlflow.active_run().info.run_id

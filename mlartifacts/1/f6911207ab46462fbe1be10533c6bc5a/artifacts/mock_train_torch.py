@@ -88,9 +88,8 @@ def my_app(cfg : DictConfig) -> None:
     input_example = x_train[:1].to(device)   # one real sample -- MLflow traces model.forward on this to serialize it
     best_model = None    # in-memory clone of the model at its best epoch -- no MLflow call happens until the end
     best_epoch = None
-    run_name = f"{cfg.run_name}"
 
-    with mlflow.start_run(run_name=run_name):
+    with mlflow.start_run():
         mlflow.log_params(OmegaConf.to_container(cfg.params, resolve=True))
 
         # log the exact dependency manifest + this script's own source, so a deployment target can
@@ -157,7 +156,6 @@ def my_app(cfg : DictConfig) -> None:
         mlflow.pytorch.log_model(best_model, name="best_model", input_example=input_example, serialization_format="pickle")  # type: ignore[arg-type]
         mlflow.log_metrics({"best_val_loss": early_stopper.best_loss, "best_epoch": best_epoch})
 
-        mlflow.set_tag('stage', cfg.stage)
         # register exactly once per run, from the best checkpoint (not final_model, which may be
         # worse than best_model if early stopping already fired)
         run_id = mlflow.active_run().info.run_id
